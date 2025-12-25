@@ -1,0 +1,192 @@
+---
+description: Code formatting, linting, and style rules
+globs: ["**/*.py"]
+alwaysApply: true
+---
+
+# Code Style & Formatting
+
+## Formatting Tools
+
+### Black (Code Formatter)
+
+- **Line length**: 100 characters
+- **Target versions**: Python 3.10, 3.11, 3.12
+
+```bash
+# Format code
+black src/ tests/
+```
+
+### Ruff (Linter)
+
+Enforced rule sets:
+- `E` - pycodestyle errors
+- `W` - pycodestyle warnings
+- `F` - pyflakes
+- `I` - isort (import sorting)
+- `B` - flake8-bugbear
+- `C4` - flake8-comprehensions
+- `UP` - pyupgrade
+- `ARG` - unused arguments
+- `SIM` - simplify
+
+```bash
+# Check for issues
+ruff check src/ tests/
+
+# Auto-fix issues
+ruff check src/ tests/ --fix
+```
+
+### MyPy (Type Checker)
+
+Strict type checking is enabled:
+
+```bash
+# Run type checking
+mypy src/
+```
+
+Configuration in `pyproject.toml`:
+- `disallow_untyped_defs = true`
+- `disallow_incomplete_defs = true`
+- `warn_return_any = true`
+- `strict_optional = true`
+
+## Line Length
+
+Maximum **100 characters**. This applies to:
+- Code lines
+- Comments
+- Docstrings
+
+## String Formatting
+
+Use f-strings for string interpolation:
+
+```python
+# CORRECT: f-strings
+click.echo(f"Loading tree from {tree}...", err=True)
+raise ValueError(f"Unknown reference: {reference}")
+
+# WRONG: %-formatting or .format()
+click.echo("Loading tree from %s..." % tree)
+raise ValueError("Unknown reference: {}".format(reference))
+```
+
+## Trailing Commas
+
+Use trailing commas in multi-line structures:
+
+```python
+# CORRECT: Trailing commas
+dependencies = [
+    "pysam>=0.22.0",
+    "pandas>=2.0.0",
+    "numpy>=1.24.0",
+    "click>=8.0.0",
+]
+
+# Easier diffs and reduces merge conflicts
+```
+
+## Blank Lines
+
+- **2 blank lines** before top-level classes and functions
+- **1 blank line** between methods in a class
+- **No blank lines** at the end of files (single newline only)
+
+## Comments
+
+### Inline Comments
+
+Use sparingly, prefer self-documenting code:
+
+```python
+# CORRECT: Explains WHY, not WHAT
+# Y chromosome is haploid, take first allele
+genotype = gt[0]
+
+# WRONG: States the obvious
+# Set genotype to first element
+genotype = gt[0]
+```
+
+### TODO Comments
+
+Format with context:
+
+```python
+# TODO: get actual version from tree metadata
+tree_version="YFull",
+```
+
+## Constants
+
+Define at module level in UPPER_SNAKE_CASE:
+
+```python
+class VCFReader:
+    # Possible Y chromosome names in VCF
+    Y_CHROMS = {"Y", "chrY", "y", "chry", "24"}
+```
+
+## Class Definition Order
+
+1. Class docstring
+2. Class constants
+3. `__init__`
+4. `@classmethod` factory methods
+5. `@property` methods
+6. Public methods
+7. Private methods (`_leading_underscore`)
+8. Dunder methods (`__len__`, `__contains__`, etc.)
+
+```python
+class Tree:
+    """Y-chromosome phylogenetic tree."""
+
+    ROOT_NAME: str = 'ROOT (Y-Chromosome "Adam")'
+
+    def __init__(self) -> None:
+        self._nodes: dict[str, Node] = {}
+
+    @classmethod
+    def from_json(cls, path: Path) -> Tree:
+        ...
+
+    @property
+    def root(self) -> Node:
+        ...
+
+    def get(self, name: str) -> Node:
+        ...
+
+    def _build_from_dict(self, data: dict) -> None:
+        ...
+
+    def __contains__(self, name: str) -> bool:
+        ...
+
+    def __len__(self) -> int:
+        ...
+```
+
+## Pre-commit Checks
+
+Before committing, always run:
+
+```bash
+# Format
+black src/ tests/
+
+# Lint
+ruff check src/ tests/
+
+# Type check
+mypy src/
+
+# Test
+pytest tests/ -v
+```

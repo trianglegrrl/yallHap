@@ -1,0 +1,62 @@
+{% set name = "yclade" %}
+{% set version = "0.1.0" %}
+
+package:
+  name: {{ name|lower }}
+  version: {{ version }}
+
+source:
+  # For GitHub release:
+  # url: https://github.com/yourusername/{{ name }}/archive/v{{ version }}.tar.gz
+  # sha256: <SHA256_HASH>
+  
+  # For local development:
+  path: ..
+
+build:
+  number: 0
+  noarch: python
+  script: {{ PYTHON }} -m pip install . -vv
+  entry_points:
+    - yclade = yclade.cli:main
+
+requirements:
+  host:
+    - python >=3.10
+    - pip
+    - setuptools >=68.0
+  run:
+    - python >=3.10
+    - pysam >=0.22.0
+    - pandas >=2.0.0
+    - numpy >=1.24.0
+    - click >=8.0.0
+    - requests >=2.28.0
+
+test:
+  imports:
+    - yclade
+    - yclade.tree
+    - yclade.snps
+    - yclade.classifier
+  commands:
+    - yclade --help
+    - yclade --version
+
+about:
+  home: https://github.com/yourusername/yclade
+  license: MIT
+  license_family: MIT
+  license_file: LICENSE
+  summary: Modern Y-chromosome haplogroup inference
+  description: |
+    YClade is a pipeline-friendly tool for Y-chromosome haplogroup 
+    classification supporting modern and ancient DNA with probabilistic 
+    confidence scoring. It uses the YFull phylogenetic tree and supports 
+    multiple reference genomes including T2T-CHM13v2.0.
+  doc_url: https://github.com/yourusername/yclade#readme
+  dev_url: https://github.com/yourusername/yclade
+
+extra:
+  recipe-maintainers:
+    - yourusername
