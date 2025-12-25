@@ -1,0 +1,85 @@
+---
+description: Core project conventions and architecture for YClade
+globs: ["**/*"]
+alwaysApply: true
+---
+
+# YClade Project Conventions
+
+## Project Overview
+
+YClade is a modern, pipeline-friendly Y-chromosome haplogroup inference tool. It provides probabilistic classification with support for ancient DNA and multiple reference genomes.
+
+## Architecture Principles
+
+1. **Fail Hard, No Fallbacks**: Never swallow errors or create fallback solutions. If something fails, raise detailed exceptions that surface the actual problem.
+
+2. **Surgical Changes**: Make only the additions, changes, and deletions required for the current task. Do not refactor surrounding code unless explicitly asked.
+
+3. **Economy of Motion**: Implement with minimal effort, surgically, with no unnecessary moving parts or configuration knobs.
+
+4. **Use Existing Dependencies**: Prefer packages already in `pyproject.toml`. When new packages are needed, use widely-adopted, well-maintained libraries.
+
+## Project Structure
+
+```
+src/yclade/           # Main package (src-layout)
+├── __init__.py       # Package version
+├── cli.py            # Click-based CLI
+├── tree.py           # YFull tree parser
+├── snps.py           # SNP database
+├── vcf.py            # VCF parsing
+├── classifier.py     # Main classification logic
+└── py.typed          # PEP 561 marker
+
+tests/                # All tests
+├── conftest.py       # Shared fixtures
+├── fixtures/         # Test data files
+└── test_*.py         # Test modules
+```
+
+## Core Dependencies
+
+- `pysam` - VCF file parsing
+- `pandas` - Data manipulation
+- `numpy` - Numerical operations
+- `click` - CLI framework
+- `requests` - HTTP client
+
+## Key Design Patterns
+
+### Dataclasses for Data Structures
+
+Use `@dataclass` for immutable data containers:
+
+```python
+@dataclass
+class SNP:
+    name: str
+    position_grch38: int | None = None
+    ancestral: str = ""
+    derived: str = ""
+```
+
+### Context Managers for Resources
+
+Use context managers for files and external resources:
+
+```python
+with VCFReader(vcf_path, sample) as reader:
+    for variant in reader.iter_variants():
+        process(variant)
+```
+
+### Class Methods for Construction
+
+Use `@classmethod` for alternative constructors:
+
+```python
+@classmethod
+def from_json(cls, path: Path) -> Tree:
+    """Load tree from JSON file."""
+    with open(path) as f:
+        data = json.load(f)
+    return cls._build_from_dict(data)
+```
