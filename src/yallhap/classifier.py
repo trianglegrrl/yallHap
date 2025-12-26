@@ -9,11 +9,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
 
-from yclade.snps import ReferenceGenome, SNP, SNPDatabase
-from yclade.tree import Tree
-from yclade.vcf import Variant, VCFReader
+from yallhap.ancient import DamageRescaleMode, apply_damage_rescale
+from yallhap.snps import SNP, ReferenceGenome, SNPDatabase
+from yallhap.tree import Tree
+from yallhap.vcf import Variant, VCFReader
 
 
 @dataclass
@@ -133,6 +133,8 @@ class HaplogroupClassifier:
         min_depth: int = 1,
         min_quality: int = 20,
         ancient_mode: bool = False,
+        transversions_only: bool = False,
+        damage_rescale: DamageRescaleMode = "none",
     ):
         """
         Initialize classifier.
@@ -143,7 +145,9 @@ class HaplogroupClassifier:
             reference: Reference genome for position lookup
             min_depth: Minimum read depth to use variant
             min_quality: Minimum genotype quality to use variant
-            ancient_mode: Enable ancient DNA damage filtering
+            ancient_mode: Enable ancient DNA damage filtering (C>T, G>A)
+            transversions_only: Only use transversions (strictest ancient mode)
+            damage_rescale: Quality score rescaling for potentially damaged variants
         """
         self.tree = tree
         self.snp_db = snp_db
@@ -151,18 +155,152 @@ class HaplogroupClassifier:
         self.min_depth = min_depth
         self.min_quality = min_quality
         self.ancient_mode = ancient_mode
+        self.transversions_only = transversions_only
+        self.damage_rescale = damage_rescale
 
         # Build position -> haplogroup mapping
         self._build_position_index()
 
     def _build_position_index(self) -> None:
-        """Build index of positions to haplogroups."""
-        self._pos_to_haplogroup: dict[int, list[str]] = {}
+        """
+        Build indices for SNP lookups.
 
+        Creates:
+        - _snp_name_to_pos: Maps SNP name → position
+        - _pos_to_snp: Maps position → SNP object
+        - _node_to_positions: Maps tree node name → list of positions for its SNPs
+        """
+        self._snp_name_to_pos: dict[str, int] = {}
+        self._pos_to_snp: dict[int, SNP] = {}
+        self._node_to_positions: dict[str, list[int]] = {}
+
+        # Build SNP name → position index from SNP database
         for snp in self.snp_db:
             pos = snp.get_position(self.reference)
-            if pos is not None and snp.haplogroup:
-                self._pos_to_haplogroup.setdefault(pos, []).append(snp.haplogroup)
+            if pos is not None:
+                # Index by primary name and aliases
+                self._snp_name_to_pos[snp.name] = pos
+                self._pos_to_snp[pos] = snp
+                for alias in snp.aliases:
+                    self._snp_name_to_pos[alias] = pos
+
+        # Build node → positions index from tree
+        for node in self.tree.iter_depth_first():
+            positions: list[int] = []
+            for snp_group in node.snps:
+                # SNPs in tree can be comma-separated
+                for snp_name in snp_group.split(","):
+                    snp_name = snp_name.strip()
+                    if snp_name and snp_name in self._snp_name_to_pos:
+                        positions.append(self._snp_name_to_pos[snp_name])
+            if positions:
+                self._node_to_positions[node.name] = positions
+
+    def classify_batch(
+        self,
+        vcf_path: Path | str,
+        samples: list[str],
+    ) -> list[HaplogroupCall]:
+        """
+        Classify multiple samples from a single VCF file.
+
+        Opens the VCF once and reads all samples in a single pass,
+        which is much faster for multi-sample VCFs.
+
+        Args:
+            vcf_path: Path to VCF file
+            samples: List of sample names to classify
+
+        Returns:
+            List of HaplogroupCall results, one per sample
+        """
+        import pysam
+
+        vcf_path = Path(vcf_path)
+        vcf = pysam.VariantFile(str(vcf_path))
+
+        # Get sample indices
+        vcf_samples = list(vcf.header.samples)
+        sample_indices = {}
+        for s in samples:
+            if s in vcf_samples:
+                sample_indices[s] = vcf_samples.index(s)
+            else:
+                raise ValueError(f"Sample {s} not found in VCF")
+
+        # Detect Y chromosome name
+        y_chrom = None
+        for name in ["Y", "chrY", "y", "24"]:
+            if name in vcf.header.contigs:
+                y_chrom = name
+                break
+
+        if y_chrom is None:
+            raise ValueError("No Y chromosome found in VCF")
+
+        # Read all variants for all samples in one pass
+        sample_variants: dict[str, dict[int, Variant]] = {s: {} for s in samples}
+
+        for record in vcf.fetch(y_chrom):
+            pos = record.pos
+            ref = record.ref
+            alts = record.alts or ()
+
+            # Skip non-SNPs
+            if len(ref) != 1 or not all(len(a) == 1 for a in alts):
+                continue
+
+            for sample_name, idx in sample_indices.items():
+                sample_data = record.samples[idx]
+                gt = sample_data.get("GT", (None,))
+
+                # Determine genotype (haploid Y, take first allele)
+                genotype = None if gt is None or gt[0] is None else gt[0]
+
+                variant = Variant(
+                    chrom=y_chrom,
+                    position=pos,
+                    ref=ref,
+                    alt=alts,
+                    genotype=genotype,
+                    depth=sample_data.get("DP"),
+                    quality=sample_data.get("GQ"),
+                )
+                sample_variants[sample_name][pos] = variant
+
+        vcf.close()
+
+        # Now classify each sample
+        results = []
+        for sample_name in samples:
+            variants = sample_variants[sample_name]
+            haplogroup_scores = self._score_haplogroups(variants)
+            best_hg, confidence, qc_scores, stats = self._find_best_haplogroup(
+                haplogroup_scores, variants
+            )
+
+            path = self.tree.path_from_root(best_hg) if best_hg in self.tree else []
+            defining_snps: list[str] = []
+            if best_hg in self.tree:
+                defining_snps = self.tree.get(best_hg).snps
+            alternatives = self._get_alternatives(haplogroup_scores, best_hg)
+
+            results.append(
+                HaplogroupCall(
+                    sample=sample_name,
+                    haplogroup=best_hg,
+                    confidence=confidence,
+                    qc_scores=qc_scores,
+                    path=path,
+                    defining_snps=defining_snps,
+                    alternatives=alternatives,
+                    snp_stats=stats,
+                    reference=self.reference,
+                    tree_version="YFull",
+                )
+            )
+
+        return results
 
     def classify(
         self,
@@ -245,98 +383,109 @@ class HaplogroupClassifier:
         """
         Score each haplogroup based on observed variants.
 
+        Uses the tree structure to map nodes to their defining SNP positions,
+        then checks whether variants show derived or ancestral alleles.
+
         Returns dict of {haplogroup: {"derived": n, "ancestral": n, "missing": n}}
         """
+        from yallhap.ancient import is_transversion
+
         scores: dict[str, dict[str, int]] = {}
 
-        # Get all informative positions
-        informative_positions = self.snp_db.positions[self.reference]
+        # Score each tree node based on its defining SNPs
+        for node_name, positions in self._node_to_positions.items():
+            if node_name not in scores:
+                scores[node_name] = {"derived": 0, "ancestral": 0, "missing": 0}
 
-        for pos in informative_positions:
-            snps_at_pos = self.snp_db.get_by_position(pos, self.reference)
-
-            for snp in snps_at_pos:
-                hg = snp.haplogroup
-                if not hg or hg not in self.tree:
+            for pos in positions:
+                snp = self._pos_to_snp.get(pos)
+                if snp is None:
                     continue
 
-                if hg not in scores:
-                    scores[hg] = {"derived": 0, "ancestral": 0, "missing": 0}
-
                 if pos not in variants:
-                    scores[hg]["missing"] += 1
+                    scores[node_name]["missing"] += 1
                     continue
 
                 variant = variants[pos]
                 called = variant.called_allele
 
                 if called is None:
-                    scores[hg]["missing"] += 1
-                elif called == snp.derived:
+                    scores[node_name]["missing"] += 1
+                    continue
+
+                # Transversions-only mode: skip all transitions
+                if self.transversions_only and not is_transversion(
+                    snp.ancestral, snp.derived
+                ):
+                    scores[node_name]["missing"] += 1
+                    continue
+
+                # Apply damage rescaling if enabled
+                if self.damage_rescale != "none" and variant.quality is not None:
+                    rescaled_quality = apply_damage_rescale(
+                        variant.quality,
+                        snp.ancestral,
+                        called,
+                        mode=self.damage_rescale,
+                    )
+                    # If rescaled quality is too low, treat as missing
+                    if rescaled_quality < self.min_quality:
+                        scores[node_name]["missing"] += 1
+                        continue
+
+                if called == snp.derived:
                     # Ancient DNA filter: skip C>T and G>A transitions
                     if self.ancient_mode and self._is_damage_like(snp, called):
-                        scores[hg]["missing"] += 1  # Treat as missing
+                        scores[node_name]["missing"] += 1  # Treat as missing
                         continue
-                    scores[hg]["derived"] += 1
+                    scores[node_name]["derived"] += 1
                 elif called == snp.ancestral:
-                    scores[hg]["ancestral"] += 1
+                    scores[node_name]["ancestral"] += 1
                 else:
                     # Discordant genotype - neither ancestral nor derived
-                    scores[hg]["missing"] += 1
+                    scores[node_name]["missing"] += 1
 
         return scores
 
     def _is_damage_like(self, snp: SNP, called: str) -> bool:
         """Check if variant looks like ancient DNA damage."""
-        # C>T damage (on reference strand)
-        if snp.ancestral == "C" and called == "T":
-            return True
-        # G>A damage (reverse complement of C>T)
-        if snp.ancestral == "G" and called == "A":
-            return True
-        return False
+        # C>T damage (on reference strand) or G>A (reverse complement)
+        return (snp.ancestral == "C" and called == "T") or (
+            snp.ancestral == "G" and called == "A"
+        )
 
     def _find_best_haplogroup(
         self,
         haplogroup_scores: dict[str, dict[str, int]],
-        variants: dict[int, Variant],
+        _variants: dict[int, Variant],  # Reserved for future QC calculations
     ) -> tuple[str, float, QCScores, SNPStats]:
         """
-        Find the best haplogroup assignment using tree traversal.
+        Find the best haplogroup assignment.
+
+        Strategy:
+        1. Evaluate all haplogroups that have derived calls
+        2. Score each by: derived ratio, path consistency, and specificity
+        3. Pick the most specific haplogroup with high confidence
 
         Returns (haplogroup, confidence, qc_scores, snp_stats)
         """
-        # Sort haplogroups by depth (most specific first)
-        sorted_hgs = sorted(
-            haplogroup_scores.keys(),
-            key=lambda hg: self.tree.get(hg).depth if hg in self.tree else 0,
-            reverse=True,
-        )
+        # Find all candidate haplogroups with derived calls
+        candidates: list[tuple[str, float, QCScores, SNPStats]] = []
 
-        best_hg = "NA"
-        best_confidence = 0.0
-        best_qc = QCScores()
-        best_stats = SNPStats()
-
-        covered_paths: set[str] = set()
-
-        for hg in sorted_hgs:
+        for hg, scores in haplogroup_scores.items():
             if hg not in self.tree:
                 continue
 
-            # Skip if we've already covered this path (more specific descendant found)
-            path = self.tree.path_to_root(hg)
-            if any(p in covered_paths for p in path[1:]):  # Skip self
+            # Must have at least some derived calls
+            if scores["derived"] == 0:
                 continue
 
-            scores = haplogroup_scores[hg]
             total = scores["derived"] + scores["ancestral"]
-
             if total == 0:
                 continue
 
-            # Calculate QC2: terminal marker consistency
-            qc2 = scores["derived"] / total if total > 0 else 0
+            # Calculate QC2: terminal marker consistency (derived ratio)
+            qc2 = scores["derived"] / total
 
             # Calculate QC3: path consistency
             qc3 = self._calculate_path_score(hg, haplogroup_scores)
@@ -344,32 +493,89 @@ class HaplogroupClassifier:
             # Calculate QC1: backbone consistency
             qc1 = self._calculate_backbone_score(hg, haplogroup_scores)
 
-            # Combined confidence
-            if qc1 > 0 and qc2 > 0 and qc3 > 0:
-                confidence = (qc1 * qc2 * qc3) ** (1 / 3)
-            else:
-                confidence = 0
+            # Combined confidence (geometric mean)
+            confidence = (
+                (qc1 * qc2 * qc3) ** (1 / 3) if qc1 > 0 and qc2 > 0 and qc3 > 0 else 0
+            )
 
-            if confidence > best_confidence:
-                best_hg = hg
-                best_confidence = confidence
-                best_qc = QCScores(
+            if confidence > 0:
+                qc = QCScores(
                     qc1_backbone=qc1,
                     qc2_terminal=qc2,
                     qc3_path=qc3,
-                    qc4_posterior=confidence,  # Simplified for now
+                    qc4_posterior=confidence,
                 )
-                best_stats = SNPStats(
+                stats = SNPStats(
                     informative_tested=total + scores["missing"],
                     derived=scores["derived"],
                     ancestral=scores["ancestral"],
                     missing=scores["missing"],
                 )
+                candidates.append((hg, confidence, qc, stats))
 
-            # Mark path as covered
-            for p in path:
-                covered_paths.add(p)
+        if not candidates:
+            return "NA", 0.0, QCScores(), SNPStats()
 
+        # Strategy: Balance specificity (depth) with evidence AND path consistency.
+        # A haplogroup with ancestral calls in its path shouldn't be picked over
+        # one with a clean path, even if the former is deeper.
+        #
+        # Key insight: We want the DEEPEST haplogroup that has GOOD path consistency.
+        # Path consistency (backbone score) filters out wrong lineages.
+
+        # Filter: Balance backbone score (path consistency) with evidence
+        # Try progressively looser thresholds until we find good candidates
+
+        def filter_candidates(
+            cands: list, min_backbone: float, min_derived: int
+        ) -> list:
+            return [
+                c
+                for c in cands
+                if c[2].qc1_backbone >= min_backbone and c[3].derived >= min_derived
+            ]
+
+        # Try strict thresholds first, then relax
+        selected = (
+            filter_candidates(candidates, 0.9, 5)
+            or filter_candidates(candidates, 0.9, 3)
+            or filter_candidates(candidates, 0.8, 3)
+            or filter_candidates(candidates, 0.8, 2)
+            or filter_candidates(candidates, 0.7, 2)
+            or [c for c in candidates if c[1] >= 0.5]
+            or candidates
+        )
+
+        # Strategy: Pick the deepest haplogroup that has good evidence AND
+        # whose ancestors also have good evidence.
+        #
+        # We score each candidate by checking if its parent haplogroups have derived calls.
+        # A deep haplogroup with no evidence in its parents is likely a false positive.
+
+        def score_lineage_support(hg: str) -> int:
+            """Count how many ancestors have derived calls."""
+            path = list(self.tree.path_to_root(hg))
+            support = 0
+            for ancestor in path[1:]:  # Skip the haplogroup itself
+                if (
+                    ancestor in haplogroup_scores
+                    and haplogroup_scores[ancestor]["derived"] >= 3
+                ):
+                    support += 1
+            return support
+
+        # Add lineage support to selection criteria
+        selected.sort(
+            key=lambda c: (
+                score_lineage_support(c[0]),  # lineage support - PRIMARY
+                self.tree.get(c[0]).depth,  # depth - SECONDARY
+                c[3].derived,  # derived count - TERTIARY
+            ),
+            reverse=True,
+        )
+
+        # Return the best candidate
+        best_hg, best_confidence, best_qc, best_stats = selected[0]
         return best_hg, best_confidence, best_qc, best_stats
 
     def _calculate_path_score(

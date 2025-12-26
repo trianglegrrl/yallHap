@@ -1,0 +1,26 @@
+# yallHap Snakemake Configuration
+#
+# Copy this file and modify for your project.
+
+# Sample sheet (CSV with columns: sample_id, vcf_path)
+samples: "samples.csv"
+
+# Reference data files
+tree: "data/yfull_tree.json"
+snp_db: "data/ybrowse_snps.csv"
+
+# Reference genome: grch37, grch38, or t2t
+reference: "grch38"
+
+# Output directory
+outdir: "results"
+
+# Ancient DNA mode (filters C>T and G>A transitions)
+ancient: false
+
+# Optional: Minimum read depth for variant calling
+min_depth: 10
+
+# Optional: Minimum genotype quality
+min_quality: 20
+

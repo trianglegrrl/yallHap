@@ -8,9 +8,13 @@ across multiple reference genomes (GRCh37, GRCh38, T2T).
 from __future__ import annotations
 
 import csv
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
+
+if TYPE_CHECKING:
+    from pyliftover import LiftOver
 
 ReferenceGenome = Literal["grch37", "grch38", "t2t"]
 
@@ -121,6 +125,106 @@ class SNPDatabase:
                     db._add_snp(snp)
 
         return db
+
+    @classmethod
+    def from_ybrowse_gff_csv(cls, path: Path | str) -> SNPDatabase:
+        """
+        Load database from YBrowse GFF-style CSV format.
+
+        This is the actual format of the YBrowse snps_hg38.csv file, which uses
+        GFF-style columns rather than the simpler internal format.
+
+        Expected columns:
+            seqid, source, type, start, end, score, strand, phase,
+            Name, ID, allele_anc, allele_der, YCC_haplogroup, ISOGG_haplogroup,
+            mutation, count_tested, count_derived, ref, comment
+
+        Args:
+            path: Path to CSV file
+
+        Returns:
+            Populated SNPDatabase instance
+        """
+        db = cls()
+        path = Path(path)
+
+        with open(path, newline="") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                snp = cls._parse_ybrowse_gff_row(row)
+                if snp:
+                    db._add_snp(snp)
+
+        return db
+
+    @staticmethod
+    def _parse_ybrowse_gff_row(
+        row: dict[str, str], detected_reference: ReferenceGenome | None = None
+    ) -> SNP | None:
+        """
+        Parse a YBrowse GFF-style CSV row into an SNP object.
+
+        Skips indels (rows where alleles are not single nucleotides).
+
+        Args:
+            row: CSV row as dict
+            detected_reference: Reference genome detected from seqid column
+        """
+        # Get alleles
+        ancestral = row.get("allele_anc", "").strip()
+        derived = row.get("allele_der", "").strip()
+
+        # Skip indels - alleles should be single nucleotides
+        valid_alleles = {"A", "C", "G", "T"}
+        if ancestral not in valid_alleles or derived not in valid_alleles:
+            return None
+
+        # Get position (start column is 1-based position)
+        position_str = row.get("start", "").strip()
+        if not position_str:
+            return None
+
+        try:
+            position = int(position_str)
+        except ValueError:
+            return None
+
+        # Get SNP name
+        name = row.get("Name", "").strip() or row.get("ID", "").strip()
+        if not name:
+            return None
+
+        # Get haplogroup (prefer YCC_haplogroup)
+        haplogroup = row.get("YCC_haplogroup", "").strip()
+
+        # Detect reference from seqid if not provided
+        if detected_reference is None:
+            seqid = row.get("seqid", "").lower()
+            if "hg19" in seqid or "grch37" in seqid:
+                detected_reference = "grch37"
+            elif "hg38" in seqid or "grch38" in seqid:
+                detected_reference = "grch38"
+            else:
+                # Default to grch38
+                detected_reference = "grch38"
+
+        # Create SNP with position in correct reference
+        if detected_reference == "grch37":
+            return SNP(
+                name=name,
+                position_grch37=position,
+                ancestral=ancestral,
+                derived=derived,
+                haplogroup=haplogroup,
+            )
+        else:
+            return SNP(
+                name=name,
+                position_grch38=position,
+                ancestral=ancestral,
+                derived=derived,
+                haplogroup=haplogroup,
+            )
 
     @staticmethod
     def _parse_row(row: dict[str, str]) -> SNP:
@@ -238,7 +342,7 @@ class SNPDatabase:
         """Return number of SNPs in database."""
         return len(self._snps)
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[SNP]:
         """Iterate over all SNPs."""
         return iter(self._snps.values())
 
@@ -250,3 +354,104 @@ class SNPDatabase:
             "grch38": set(self._by_position_grch38.keys()),
             "t2t": set(self._by_position_t2t.keys()),
         }
+
+    def lift_to_t2t(
+        self,
+        chain_file: Path | str,
+        source_reference: ReferenceGenome = "grch38",
+    ) -> int:
+        """
+        Compute T2T positions for all SNPs using liftover.
+
+        Uses pyliftover to convert positions from source reference to T2T-CHM13v2.0.
+        Updates SNP objects in place with the computed T2T positions.
+
+        Args:
+            chain_file: Path to chain file (e.g., grch38-chm13v2.chain)
+            source_reference: Source reference genome (grch37 or grch38)
+
+        Returns:
+            Number of SNPs successfully lifted over
+
+        Raises:
+            FileNotFoundError: If chain file doesn't exist
+            ValueError: If source_reference is t2t (can't liftover to itself)
+        """
+        from pyliftover import LiftOver
+
+        if source_reference == "t2t":
+            raise ValueError("Cannot liftover from T2T to T2T")
+
+        chain_path = Path(chain_file)
+        if not chain_path.exists():
+            raise FileNotFoundError(f"Chain file not found: {chain_path}")
+
+        lo = LiftOver(str(chain_path))
+        lifted_count = 0
+
+        for snp in self._snps.values():
+            # Get source position
+            if source_reference == "grch37":
+                source_pos = snp.position_grch37
+                # pyliftover uses UCSC chromosome names
+                chrom = "chrY"
+            else:
+                source_pos = snp.position_grch38
+                chrom = "chrY"
+
+            if source_pos is None:
+                continue
+
+            # pyliftover uses 0-based coordinates
+            result = lo.convert_coordinate(chrom, source_pos - 1)
+
+            if result and len(result) > 0:
+                # Result is list of (chrom, pos, strand, score) tuples
+                # Take the first (best) result and convert back to 1-based
+                new_chrom, new_pos, strand, score = result[0]
+                snp.position_t2t = new_pos + 1
+                lifted_count += 1
+
+                # Update T2T position index
+                self._by_position_t2t.setdefault(snp.position_t2t, []).append(snp)
+
+        return lifted_count
+
+    def compute_all_t2t_positions(
+        self,
+        grch38_chain: Path | str | None = None,
+        grch37_chain: Path | str | None = None,
+    ) -> dict[str, int]:
+        """
+        Compute T2T positions from available source references.
+
+        Tries GRCh38 first if available, then falls back to GRCh37.
+        Returns statistics about the liftover process.
+
+        Args:
+            grch38_chain: Path to GRCh38-to-T2T chain file
+            grch37_chain: Path to GRCh37-to-T2T chain file
+
+        Returns:
+            Dict with counts: lifted_from_grch38, lifted_from_grch37, total_with_t2t
+        """
+        stats = {
+            "lifted_from_grch38": 0,
+            "lifted_from_grch37": 0,
+            "total_with_t2t": 0,
+        }
+
+        # Try GRCh38 first
+        if grch38_chain and Path(grch38_chain).exists():
+            stats["lifted_from_grch38"] = self.lift_to_t2t(grch38_chain, "grch38")
+
+        # Then try GRCh37 for any remaining SNPs without T2T positions
+        if grch37_chain and Path(grch37_chain).exists():
+            # Only lift SNPs that don't have T2T positions yet
+            snps_needing_lift = [s for s in self._snps.values() if s.position_t2t is None]
+            if snps_needing_lift:
+                stats["lifted_from_grch37"] = self.lift_to_t2t(grch37_chain, "grch37")
+
+        stats["total_with_t2t"] = sum(1 for s in self._snps.values() if s.position_t2t)
+
+        return stats

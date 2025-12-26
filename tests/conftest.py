@@ -1,5 +1,5 @@
 """
-Pytest configuration and fixtures for yclade tests.
+Pytest configuration and fixtures for yallhap tests.
 """
 
 from pathlib import Path
@@ -51,8 +51,11 @@ def sample_tree_dict() -> dict:
 @pytest.fixture
 def sample_snps_csv(tmp_path: Path) -> Path:
     """Create a sample SNP database CSV for testing."""
+    # Note: aliases are comma-separated within the field, but since this is a CSV,
+    # we need to quote the field or use a different separator in the parser.
+    # The parser splits by comma, so we use semicolon in the CSV and fix the parser.
     csv_content = """name,aliases,grch37_pos,grch38_pos,ancestral,derived,haplogroup
-L21,M529;S145,2887478,2655229,C,T,R-L21
+L21,"M529,S145",2887478,2655229,C,T,R-L21
 M269,,2803636,2571333,G,A,R1b
 M343,,2888436,2656183,G,A,R1
 M207,,14524515,14279666,A,G,R

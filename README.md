@@ -1,4 +1,4 @@
-# YClade
+# yallHap
 
 Modern, pipeline-friendly Y-chromosome haplogroup inference.
 
@@ -19,26 +19,26 @@ Modern, pipeline-friendly Y-chromosome haplogroup inference.
 ### pip (recommended)
 
 ```bash
-pip install yclade
+pip install yallhap
 ```
 
 ### Conda
 
 ```bash
-conda install -c bioconda yclade
+conda install -c bioconda yallhap
 ```
 
 ### Docker
 
 ```bash
-docker pull yourusername/yclade
+docker pull yourusername/yallhap
 ```
 
 ### From source
 
 ```bash
-git clone https://github.com/yourusername/yclade.git
-cd yclade
+git clone https://github.com/yourusername/yallhap.git
+cd yallhap
 pip install -e ".[dev]"
 ```
 
@@ -46,17 +46,17 @@ pip install -e ".[dev]"
 
 ```bash
 # Download reference data
-yclade download --output-dir data/
+yallhap download --output-dir data/
 
 # Classify a sample
-yclade classify sample.vcf.gz \
+yallhap classify sample.vcf.gz \
     --tree data/yfull_tree.json \
     --snp-db data/ybrowse_snps.csv \
     --reference grch38 \
     --output result.json
 
 # Ancient DNA mode
-yclade classify ancient_sample.vcf.gz \
+yallhap classify ancient_sample.vcf.gz \
     --tree data/yfull_tree.json \
     --snp-db data/ybrowse_snps.csv \
     --ancient \
@@ -116,7 +116,7 @@ SAMPLE1	R-L21	0.9700	0.9800	1.0000	0.9500	0.9700	145	1089	13
 ### Nextflow
 
 ```nextflow
-process YCLADE {
+process YALLHAP {
     input:
     path vcf
 
@@ -125,7 +125,7 @@ process YCLADE {
 
     script:
     """
-    yclade classify ${vcf} \
+    yallhap classify ${vcf} \
         --tree ${params.tree} \
         --snp-db ${params.snp_db} \
         --output ${vcf.baseName}.json
@@ -136,17 +136,17 @@ process YCLADE {
 ### Snakemake
 
 ```python
-rule yclade:
+rule yallhap:
     input:
         vcf="{sample}.vcf.gz"
     output:
         json="{sample}.haplogroup.json"
     params:
-        tree=config["yclade_tree"],
-        snp_db=config["yclade_snps"]
+        tree=config["yallhap_tree"],
+        snp_db=config["yallhap_snps"]
     shell:
         """
-        yclade classify {input.vcf} \
+        yallhap classify {input.vcf} \
             --tree {params.tree} \
             --snp-db {params.snp_db} \
             --output {output.json}
@@ -157,8 +157,8 @@ rule yclade:
 
 ```bash
 # Clone repository
-git clone https://github.com/yourusername/yclade.git
-cd yclade
+git clone https://github.com/yourusername/yallhap.git
+cd yallhap
 
 # Install with dev dependencies
 pip install -e ".[dev]"
@@ -174,13 +174,13 @@ mypy src/
 
 ## Citation
 
-If you use YClade in your research, please cite:
+If you use yallHap in your research, please cite:
 
 ```bibtex
-@software{yclade,
-  title = {YClade: Modern Y-chromosome haplogroup inference},
-  year = {2024},
-  url = {https://github.com/yourusername/yclade}
+@software{yallhap,
+  title = {yallHap: Modern Y-chromosome haplogroup inference},
+  year = {2025},
+  url = {https://github.com/trianglegrrl/yallhap}
 }
 ```
 

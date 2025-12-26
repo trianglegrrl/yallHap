@@ -1,5 +1,5 @@
 """
-Command-line interface for yclade.
+Command-line interface for yallhap.
 
 Provides pipeline-friendly CLI with proper exit codes and output formats.
 """
@@ -13,17 +13,17 @@ from typing import TextIO
 
 import click
 
-from yclade import __version__
-from yclade.classifier import HaplogroupCall, HaplogroupClassifier
-from yclade.snps import SNPDatabase
-from yclade.tree import Tree
+from yallhap import __version__
+from yallhap.classifier import HaplogroupCall, HaplogroupClassifier
+from yallhap.snps import SNPDatabase
+from yallhap.tree import Tree
 
 
 @click.group()
-@click.version_option(version=__version__, prog_name="yclade")
+@click.version_option(version=__version__, prog_name="yallhap")
 def main() -> None:
     """
-    YClade: Modern Y-chromosome haplogroup inference.
+    yallHap: Modern Y-chromosome haplogroup inference.
 
     A pipeline-friendly tool for Y-chromosome haplogroup classification
     supporting modern and ancient DNA with probabilistic confidence scoring.
@@ -63,7 +63,18 @@ def main() -> None:
 @click.option(
     "--ancient",
     is_flag=True,
-    help="Enable ancient DNA mode (filter damage-like transitions)",
+    help="Enable ancient DNA mode (filter C>T and G>A damage-like transitions)",
+)
+@click.option(
+    "--transversions-only",
+    is_flag=True,
+    help="Only use transversions (strictest ancient DNA mode, ignores all transitions)",
+)
+@click.option(
+    "--damage-rescale",
+    type=click.Choice(["none", "moderate", "aggressive"]),
+    default="none",
+    help="Rescale quality scores for potentially damaged variants [default: none]",
 )
 @click.option(
     "--min-depth",
@@ -98,6 +109,8 @@ def classify(
     reference: str,
     sample: str | None,
     ancient: bool,
+    transversions_only: bool,
+    damage_rescale: str,
     min_depth: int,
     min_quality: int,
     output: Path | None,
@@ -117,6 +130,10 @@ def classify(
         click.echo(f"Loading SNP database from {snp_db}...", err=True)
         snp_db_obj = SNPDatabase.from_csv(snp_db)
 
+        # Handle T2T reference: need to liftover positions
+        if reference == "t2t":
+            snp_db_obj = _prepare_t2t_database(snp_db_obj)
+
         # Create classifier
         classifier = HaplogroupClassifier(
             tree=tree_obj,
@@ -125,6 +142,8 @@ def classify(
             min_depth=min_depth,
             min_quality=min_quality,
             ancient_mode=ancient,
+            transversions_only=transversions_only,
+            damage_rescale=damage_rescale,  # type: ignore
         )
 
         # Run classification
@@ -156,6 +175,53 @@ def classify(
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(99)
+
+
+def _prepare_t2t_database(snp_db: SNPDatabase) -> SNPDatabase:
+    """
+    Prepare SNP database for T2T reference by computing liftover positions.
+
+    Looks for chain files in data/liftover/ and computes T2T positions.
+
+    Args:
+        snp_db: SNP database to enhance with T2T positions
+
+    Returns:
+        Same database with T2T positions populated
+
+    Raises:
+        FileNotFoundError: If chain files are not found
+    """
+    # Look for chain files in standard locations
+    chain_dirs = [
+        Path("data/liftover"),
+        Path(__file__).parent.parent.parent / "data" / "liftover",
+    ]
+
+    grch38_chain = None
+    grch37_chain = None
+
+    for chain_dir in chain_dirs:
+        if (chain_dir / "grch38-chm13v2.chain").exists():
+            grch38_chain = chain_dir / "grch38-chm13v2.chain"
+        if (chain_dir / "hg19-chm13v2.chain").exists():
+            grch37_chain = chain_dir / "hg19-chm13v2.chain"
+
+    if grch38_chain is None and grch37_chain is None:
+        raise FileNotFoundError(
+            "T2T liftover chain files not found. "
+            "Run 'python scripts/download_liftover_chains.py' to download them."
+        )
+
+    click.echo("Computing T2T positions via liftover...", err=True)
+    stats = snp_db.compute_all_t2t_positions(grch38_chain, grch37_chain)
+    click.echo(
+        f"  Lifted {stats['total_with_t2t']} SNPs to T2T "
+        f"(GRCh38: {stats['lifted_from_grch38']}, GRCh37: {stats['lifted_from_grch37']})",
+        err=True,
+    )
+
+    return snp_db
 
 
 def _write_result(result: HaplogroupCall, file: TextIO, format: str) -> None:
@@ -221,7 +287,18 @@ def _write_result(result: HaplogroupCall, file: TextIO, format: str) -> None:
 @click.option(
     "--ancient",
     is_flag=True,
-    help="Enable ancient DNA mode",
+    help="Enable ancient DNA mode (filter C>T and G>A damage-like transitions)",
+)
+@click.option(
+    "--transversions-only",
+    is_flag=True,
+    help="Only use transversions (strictest ancient DNA mode)",
+)
+@click.option(
+    "--damage-rescale",
+    type=click.Choice(["none", "moderate", "aggressive"]),
+    default="none",
+    help="Rescale quality scores for potentially damaged variants [default: none]",
 )
 @click.option(
     "--output",
@@ -242,6 +319,8 @@ def batch(
     snp_db: Path,
     reference: str,
     ancient: bool,
+    transversions_only: bool,
+    damage_rescale: str,
     output: Path,
     threads: int,
 ) -> None:
@@ -250,18 +329,23 @@ def batch(
 
     Writes results to a single TSV file with one row per sample.
     """
-    from concurrent.futures import ProcessPoolExecutor, as_completed
 
     try:
         # Load tree and SNP database
         tree_obj = Tree.from_json(tree)
         snp_db_obj = SNPDatabase.from_csv(snp_db)
 
+        # Handle T2T reference: need to liftover positions
+        if reference == "t2t":
+            snp_db_obj = _prepare_t2t_database(snp_db_obj)
+
         classifier = HaplogroupClassifier(
             tree=tree_obj,
             snp_db=snp_db_obj,
             reference=reference,  # type: ignore
             ancient_mode=ancient,
+            transversions_only=transversions_only,
+            damage_rescale=damage_rescale,  # type: ignore
         )
 
         results: list[HaplogroupCall] = []
@@ -276,7 +360,9 @@ def batch(
                 click.echo(f"  {vcf.name}: {result.haplogroup}", err=True)
         else:
             # Parallel processing not yet implemented
-            click.echo("Warning: Parallel processing not yet implemented, using single thread", err=True)
+            click.echo(
+                "Warning: Parallel processing not yet implemented, using single thread", err=True
+            )
             for vcf in vcf_files:
                 result = classifier.classify(vcf)
                 results.append(result)
@@ -319,6 +405,49 @@ def batch(
         sys.exit(99)
 
 
+def _download_with_progress(
+    url: str,
+    output_path: Path,
+    label: str,
+    timeout: int = 300,
+) -> None:
+    """
+    Download a file with streaming and progress bar.
+
+    Args:
+        url: URL to download
+        output_path: Path to save the file
+        label: Label to show in progress bar
+        timeout: Request timeout in seconds
+
+    Raises:
+        requests.RequestException: If download fails
+    """
+    import requests
+
+    response = requests.get(url, stream=True, timeout=timeout)
+    response.raise_for_status()
+
+    # Get file size if available
+    total_size = response.headers.get("content-length")
+    total_bytes = int(total_size) if total_size else None
+
+    with (
+        open(output_path, "wb") as f,
+        click.progressbar(  # type: ignore[var-annotated]
+            length=total_bytes,
+            label=label,
+            show_eta=True,
+            show_percent=True,
+            file=sys.stderr,
+        ) as bar,
+    ):
+        for chunk in response.iter_content(chunk_size=8192):
+            if chunk:
+                f.write(chunk)
+                bar.update(len(chunk))
+
+
 @main.command()
 @click.option(
     "--output-dir",
@@ -327,45 +456,59 @@ def batch(
     default=Path("data"),
     help="Output directory for downloaded files [default: ./data]",
 )
-def download(output_dir: Path) -> None:
+@click.option(
+    "--force",
+    "-f",
+    is_flag=True,
+    help="Force re-download even if files exist",
+)
+def download(output_dir: Path, force: bool) -> None:
     """
     Download YFull tree and SNP database.
 
     Downloads the latest YFull tree from GitHub and YBrowse SNP database.
+    Skips files that already exist unless --force is specified.
     """
-    import requests
-
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Download YFull tree
-    click.echo("Downloading YFull tree...", err=True)
+    # Define files to download
     tree_url = "https://raw.githubusercontent.com/YFullTeam/YTree/master/current_tree.json"
+    tree_path = output_dir / "yfull_tree.json"
+    snp_url = "http://ybrowse.org/gbrowse2/gff/snps_hg38.csv"
+    snp_path = output_dir / "ybrowse_snps.csv"
 
-    try:
-        response = requests.get(tree_url, timeout=60)
-        response.raise_for_status()
-        tree_path = output_dir / "yfull_tree.json"
-        with open(tree_path, "wb") as f:
-            f.write(response.content)
-        click.echo(f"  Saved to {tree_path}", err=True)
-    except requests.RequestException as e:
-        click.echo(f"  Failed to download YFull tree: {e}", err=True)
-        sys.exit(1)
+    # Check existing files
+    tree_exists = tree_path.exists()
+    snp_exists = snp_path.exists()
+
+    if tree_exists and snp_exists and not force:
+        click.echo(f"Files already exist in {output_dir}/", err=True)
+        click.echo(f"  - {tree_path.name}", err=True)
+        click.echo(f"  - {snp_path.name}", err=True)
+        click.echo("Use --force to re-download.", err=True)
+        sys.exit(0)
+
+    # Download YFull tree
+    if tree_exists and not force:
+        click.echo(f"Skipping {tree_path.name} (exists)", err=True)
+    else:
+        try:
+            _download_with_progress(tree_url, tree_path, "YFull tree")
+            click.echo(f"  Saved to {tree_path}", err=True)
+        except Exception as e:
+            click.echo(f"  Failed to download YFull tree: {e}", err=True)
+            sys.exit(1)
 
     # Download YBrowse SNP database
-    click.echo("Downloading YBrowse SNP database...", err=True)
-    snp_url = "http://ybrowse.org/gbrowse2/gff/snps_hg38.csv"
-
-    try:
-        response = requests.get(snp_url, timeout=120)
-        response.raise_for_status()
-        snp_path = output_dir / "ybrowse_snps.csv"
-        with open(snp_path, "wb") as f:
-            f.write(response.content)
-        click.echo(f"  Saved to {snp_path}", err=True)
-    except requests.RequestException as e:
-        click.echo(f"  Failed to download SNP database: {e}", err=True)
-        sys.exit(1)
+    if snp_exists and not force:
+        click.echo(f"Skipping {snp_path.name} (exists)", err=True)
+    else:
+        try:
+            _download_with_progress(snp_url, snp_path, "YBrowse SNPs")
+            click.echo(f"  Saved to {snp_path}", err=True)
+        except Exception as e:
+            click.echo(f"  Failed to download SNP database: {e}", err=True)
+            sys.exit(1)
 
     click.echo("Download complete!", err=True)
 

@@ -118,17 +118,29 @@ dmypy.json
 .pyre/
 
 # Data files (downloaded at runtime)
-data/*.json
-data/*.csv
-data/*.vcf*
+data/
 !data/.gitkeep
 
-# IDE
+# Validation results
+validation_results*.json
+
+# IDE and editor files
 .idea/
 .vscode/
 *.swp
 *.swo
+*.code-workspace
 
 # OS
 .DS_Store
 Thumbs.db
+
+# Cursor AI
+.cursor/
+.cursor-plans/
+
+# External tools
+yhaplo/
+
+# Temp files
+=0.4

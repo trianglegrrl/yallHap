@@ -1,12 +1,12 @@
 """
-Unit tests for yclade.snps module.
+Unit tests for yallhap.snps module.
 """
 
 from pathlib import Path
 
 import pytest
 
-from yclade.snps import SNP, SNPDatabase
+from yallhap.snps import SNP, SNPDatabase
 
 
 class TestSNP:
@@ -136,6 +136,64 @@ class TestSNPDatabase:
         assert len(positions["grch38"]) > 0
 
 
+class TestYBrowseGFFCSVParsing:
+    """Tests for parsing actual YBrowse GFF-style CSV format."""
+
+    def test_from_ybrowse_gff_csv_real_format(self, tmp_path: Path) -> None:
+        """Test parsing actual YBrowse CSV format with GFF-style columns."""
+        csv_content = '''"seqid","source","type","start","end","score","strand","phase","Name","ID","allele_anc","allele_der","YCC_haplogroup","ISOGG_haplogroup","mutation","count_tested","count_derived","ref","comment"
+"chrY","point","snp","2655229","2655229",".","+",".","L21","L21","C","T","R1b","R1b1a2a1a2c","C to T","100","50","Poznik","."'''
+
+        csv_path = tmp_path / "ybrowse.csv"
+        csv_path.write_text(csv_content)
+
+        db = SNPDatabase.from_ybrowse_gff_csv(csv_path)
+
+        assert len(db) == 1
+        snp = db.get_by_name("L21")
+        assert snp.position_grch38 == 2655229
+        assert snp.ancestral == "C"
+        assert snp.derived == "T"
+        assert snp.haplogroup == "R1b"
+
+    def test_from_ybrowse_gff_csv_multiple_snps(self, tmp_path: Path) -> None:
+        """Test parsing multiple SNPs from YBrowse format."""
+        csv_content = '''"seqid","source","type","start","end","score","strand","phase","Name","ID","allele_anc","allele_der","YCC_haplogroup","ISOGG_haplogroup","mutation","count_tested","count_derived","ref","comment"
+"chrY","point","snp","2655229","2655229",".","+",".","L21","L21","C","T","R1b","R1b1a2a1a2c","C to T","100","50","Poznik","."
+"chrY","point","snp","2571333","2571333",".","+",".","M269","M269","G","A","R1b","R1b1a2","G to A","200","100","Poznik","."
+"chrY","point","snp","14696931","14696931",".","+",".","M168","M168","C","T","CT","CT","C to T","50","25","Poznik","."'''
+
+        csv_path = tmp_path / "ybrowse_multi.csv"
+        csv_path.write_text(csv_content)
+
+        db = SNPDatabase.from_ybrowse_gff_csv(csv_path)
+
+        assert len(db) == 3
+        assert "L21" in db
+        assert "M269" in db
+        assert "M168" in db
+
+        m269 = db.get_by_name("M269")
+        assert m269.position_grch38 == 2571333
+        assert m269.haplogroup == "R1b"
+
+    def test_from_ybrowse_gff_csv_skips_indels(self, tmp_path: Path) -> None:
+        """Test that indels are skipped (type != 'snp' or non-single-base alleles)."""
+        csv_content = '''"seqid","source","type","start","end","score","strand","phase","Name","ID","allele_anc","allele_der","YCC_haplogroup","ISOGG_haplogroup","mutation","count_tested","count_derived","ref","comment"
+"chrY","point","snp","2655229","2655229",".","+",".","L21","L21","C","T","R1b","R1b1a2a1a2c","C to T","100","50","Poznik","."
+"chrY","indel","snp","1012648","1012650",".","+",".","FGC57219","FGC57219","ins","del","unknown","unknown","3T to 2T","0","0","Full genomes","."'''
+
+        csv_path = tmp_path / "ybrowse_indel.csv"
+        csv_path.write_text(csv_content)
+
+        db = SNPDatabase.from_ybrowse_gff_csv(csv_path)
+
+        # Should only have L21, not the indel
+        assert len(db) == 1
+        assert "L21" in db
+        assert "FGC57219" not in db
+
+
 class TestSNPDatabaseEdgeCases:
     """Edge case tests for SNPDatabase."""
 
@@ -172,3 +230,112 @@ SNP2,,1000,1000,C,T,HG2
         db = SNPDatabase.from_csv(csv_path)
         snps = db.get_by_position(1000, "grch38")
         assert len(snps) == 2
+
+
+class TestT2TLiftover:
+    """Tests for T2T liftover functionality."""
+
+    @pytest.fixture
+    def liftover_chain_path(self) -> Path:
+        """Return path to GRCh38-to-T2T chain file."""
+        chain_path = Path("data/liftover/grch38-chm13v2.chain")
+        if not chain_path.exists():
+            pytest.skip("Liftover chain files not downloaded")
+        return chain_path
+
+    @pytest.fixture
+    def grch37_chain_path(self) -> Path:
+        """Return path to GRCh37-to-T2T chain file."""
+        chain_path = Path("data/liftover/hg19-chm13v2.chain")
+        if not chain_path.exists():
+            pytest.skip("Liftover chain files not downloaded")
+        return chain_path
+
+    def test_lift_to_t2t_basic(self, tmp_path: Path, liftover_chain_path: Path) -> None:
+        """Test basic liftover from GRCh38 to T2T."""
+        # Create database with known SNP
+        csv_content = """name,aliases,grch37_pos,grch38_pos,ancestral,derived,haplogroup
+L21,,2887478,2655229,C,T,R-L21
+"""
+        csv_path = tmp_path / "snps.csv"
+        csv_path.write_text(csv_content)
+
+        db = SNPDatabase.from_csv(csv_path)
+
+        # Initially no T2T position
+        snp = db.get_by_name("L21")
+        assert snp.position_t2t is None
+
+        # Lift to T2T
+        lifted_count = db.lift_to_t2t(liftover_chain_path, "grch38")
+
+        # Should have lifted the SNP
+        assert lifted_count == 1
+        snp = db.get_by_name("L21")
+        assert snp.position_t2t is not None
+        assert snp.position_t2t > 0
+
+    def test_lift_to_t2t_from_grch37(
+        self, tmp_path: Path, grch37_chain_path: Path
+    ) -> None:
+        """Test liftover from GRCh37 to T2T."""
+        csv_content = """name,aliases,grch37_pos,grch38_pos,ancestral,derived,haplogroup
+L21,,2887478,,C,T,R-L21
+"""
+        csv_path = tmp_path / "snps.csv"
+        csv_path.write_text(csv_content)
+
+        db = SNPDatabase.from_csv(csv_path)
+        lifted_count = db.lift_to_t2t(grch37_chain_path, "grch37")
+
+        assert lifted_count == 1
+        snp = db.get_by_name("L21")
+        assert snp.position_t2t is not None
+
+    def test_lift_to_t2t_chain_not_found(self, tmp_path: Path) -> None:
+        """Liftover with missing chain file raises FileNotFoundError."""
+        csv_content = """name,aliases,grch37_pos,grch38_pos,ancestral,derived,haplogroup
+L21,,2887478,2655229,C,T,R-L21
+"""
+        csv_path = tmp_path / "snps.csv"
+        csv_path.write_text(csv_content)
+
+        db = SNPDatabase.from_csv(csv_path)
+
+        with pytest.raises(FileNotFoundError, match="Chain file not found"):
+            db.lift_to_t2t("/nonexistent/chain.chain", "grch38")
+
+    def test_lift_to_t2t_from_t2t_raises(self, tmp_path: Path) -> None:
+        """Liftover from T2T to T2T raises ValueError."""
+        csv_content = """name,aliases,grch37_pos,grch38_pos,ancestral,derived,haplogroup
+L21,,2887478,2655229,C,T,R-L21
+"""
+        csv_path = tmp_path / "snps.csv"
+        csv_path.write_text(csv_content)
+
+        db = SNPDatabase.from_csv(csv_path)
+
+        with pytest.raises(ValueError, match="Cannot liftover from T2T to T2T"):
+            db.lift_to_t2t("dummy.chain", "t2t")  # type: ignore
+
+    def test_position_index_updated_after_liftover(
+        self, tmp_path: Path, liftover_chain_path: Path
+    ) -> None:
+        """T2T position index is updated after liftover."""
+        csv_content = """name,aliases,grch37_pos,grch38_pos,ancestral,derived,haplogroup
+L21,,2887478,2655229,C,T,R-L21
+"""
+        csv_path = tmp_path / "snps.csv"
+        csv_path.write_text(csv_content)
+
+        db = SNPDatabase.from_csv(csv_path)
+        db.lift_to_t2t(liftover_chain_path, "grch38")
+
+        snp = db.get_by_name("L21")
+        t2t_pos = snp.position_t2t
+        assert t2t_pos is not None
+
+        # Should be able to find SNP by T2T position
+        snps_at_pos = db.get_by_position(t2t_pos, "t2t")
+        assert len(snps_at_pos) >= 1
+        assert any(s.name == "L21" for s in snps_at_pos)

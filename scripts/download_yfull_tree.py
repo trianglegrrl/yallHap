@@ -12,7 +12,6 @@ from pathlib import Path
 
 import requests
 
-
 YFULL_TREE_URL = "https://raw.githubusercontent.com/YFullTeam/YTree/master/current_tree.json"
 
 

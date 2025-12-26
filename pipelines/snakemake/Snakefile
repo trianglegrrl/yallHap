@@ -1,0 +1,145 @@
+"""
+yallHap Snakemake Workflow
+
+Y-chromosome haplogroup inference for genomic samples.
+
+Usage:
+    snakemake --configfile config.yaml --cores 4
+
+Author: yallHap Contributors
+License: MIT
+"""
+
+import os
+import pandas as pd
+from pathlib import Path
+
+# Load configuration
+configfile: "config.yaml"
+
+# Read sample sheet
+SAMPLES = pd.read_csv(config["samples"]).set_index("sample_id", drop=False)
+
+# Output directory
+OUTDIR = config.get("outdir", "results")
+
+# Reference data
+TREE = config["tree"]
+SNP_DB = config["snp_db"]
+REFERENCE = config.get("reference", "grch38")
+ANCIENT = config.get("ancient", False)
+
+
+rule all:
+    """Target rule: generate all outputs."""
+    input:
+        expand(f"{OUTDIR}/individual/{{sample}}.json", sample=SAMPLES.sample_id),
+        f"{OUTDIR}/yallhap_results.tsv",
+
+
+rule classify_sample:
+    """Classify a single sample's Y-chromosome haplogroup."""
+    input:
+        vcf = lambda wildcards: SAMPLES.loc[wildcards.sample, "vcf_path"],
+        tree = TREE,
+        snp_db = SNP_DB,
+    output:
+        json = f"{OUTDIR}/individual/{{sample}}.json",
+        tsv = f"{OUTDIR}/individual/{{sample}}.tsv",
+    params:
+        reference = REFERENCE,
+        ancient_flag = "--ancient" if ANCIENT else "",
+    log:
+        f"{OUTDIR}/logs/{{sample}}.log",
+    conda:
+        "envs/yallhap.yaml"
+    shell:
+        """
+        yallhap classify \
+            {input.vcf} \
+            --tree {input.tree} \
+            --snp-db {input.snp_db} \
+            --reference {params.reference} \
+            --sample {wildcards.sample} \
+            {params.ancient_flag} \
+            --format json \
+            --output {output.json} \
+            2> {log}
+
+        yallhap classify \
+            {input.vcf} \
+            --tree {input.tree} \
+            --snp-db {input.snp_db} \
+            --reference {params.reference} \
+            --sample {wildcards.sample} \
+            {params.ancient_flag} \
+            --format tsv \
+            --output {output.tsv} \
+            2>> {log}
+        """
+
+
+rule merge_results:
+    """Merge all individual TSV results into a single file."""
+    input:
+        tsv_files = expand(f"{OUTDIR}/individual/{{sample}}.tsv", sample=SAMPLES.sample_id),
+    output:
+        f"{OUTDIR}/yallhap_results.tsv",
+    run:
+        import pandas as pd
+
+        dfs = []
+        for f in input.tsv_files:
+            df = pd.read_csv(f, sep="\t")
+            dfs.append(df)
+
+        merged = pd.concat(dfs, ignore_index=True)
+        merged.to_csv(output[0], sep="\t", index=False)
+
+
+rule batch_classify:
+    """Alternative: batch classify multiple VCF files at once."""
+    input:
+        vcf_files = [SAMPLES.loc[s, "vcf_path"] for s in SAMPLES.sample_id],
+        tree = TREE,
+        snp_db = SNP_DB,
+    output:
+        f"{OUTDIR}/yallhap_batch_results.tsv",
+    params:
+        reference = REFERENCE,
+        ancient_flag = "--ancient" if ANCIENT else "",
+    log:
+        f"{OUTDIR}/logs/batch.log",
+    conda:
+        "envs/yallhap.yaml"
+    shell:
+        """
+        yallhap batch \
+            {input.vcf_files} \
+            --tree {input.tree} \
+            --snp-db {input.snp_db} \
+            --reference {params.reference} \
+            {params.ancient_flag} \
+            --output {output} \
+            2> {log}
+        """
+
+
+rule download_data:
+    """Download reference data (YFull tree and YBrowse SNPs)."""
+    output:
+        tree = "data/yfull_tree.json",
+        snp_db = "data/ybrowse_snps.csv",
+    log:
+        "logs/download.log",
+    conda:
+        "envs/yallhap.yaml"
+    shell:
+        """
+        yallhap download --output-dir data/ 2> {log}
+        """
+
+
+# Cluster configuration for SLURM/SGE
+# Use: snakemake --profile slurm
+

@@ -1,4 +1,4 @@
-# YClade Dockerfile
+# yallHap Dockerfile
 # Multi-stage build for smaller final image
 
 # Build stage
@@ -24,7 +24,7 @@ RUN pip install --no-cache-dir build && \
 # Runtime stage
 FROM python:3.11-slim
 
-LABEL maintainer="YClade Contributors"
+LABEL maintainer="yallHap Contributors"
 LABEL description="Modern Y-chromosome haplogroup inference"
 LABEL version="0.1.0"
 
@@ -41,11 +41,11 @@ RUN pip install --no-cache-dir /wheels/*.whl && \
     rm -rf /wheels
 
 # Create non-root user
-RUN useradd -m -s /bin/bash yclade
-USER yclade
+RUN useradd -m -s /bin/bash yallhap
+USER yallhap
 
 # Default data directory
 WORKDIR /data
 
-ENTRYPOINT ["yclade"]
+ENTRYPOINT ["yallhap"]
 CMD ["--help"]

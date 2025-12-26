@@ -103,22 +103,96 @@ class Tree:
         """
         Internal method to construct tree from dictionary.
 
-        YFull format: {"parent_name": ["child1", "child2", ...], ...}
+        Handles two formats:
+        1. Flat format: {"parent_name": ["child1", "child2", ...], ...}
+        2. YFull nested format: {"id": "name", "snps": [...], "children": [...], ...}
         """
         if not data:
             raise ValueError("Empty tree data")
 
+        # Detect format: YFull nested format has 'children' key with list of dicts
+        if "children" in data and isinstance(data.get("children"), list):
+            self._build_from_yfull_nested(data)
+        else:
+            self._build_from_flat_dict(data)
+
+    def _build_from_yfull_nested(
+        self, data: dict, parent_name: str | None = None
+    ) -> None:
+        """
+        Build tree from YFull's nested JSON format.
+
+        YFull format:
+        {
+            "id": "A00",
+            "snps": ["A00-M91", ...],
+            "formed": 235900,
+            "tmrca": 212800,
+            "children": [{...}, {...}]
+        }
+        """
+        # Get node name - root has empty id
+        name = data.get("id", "")
+        if not name:
+            name = self.ROOT_NAME
+
+        # Parse SNPs (can be string with "/" separators)
+        snps_raw = data.get("snps", "")
+        if isinstance(snps_raw, str):
+            snps = [s.strip() for s in snps_raw.split("/") if s.strip()]
+        elif isinstance(snps_raw, list):
+            snps = snps_raw
+        else:
+            snps = []
+
+        # Create node
+        node = Node(
+            name=name,
+            snps=snps,
+            parent_name=parent_name,
+            formed=data.get("formed"),
+            tmrca=data.get("tmrca"),
+        )
+        self._nodes[name] = node
+
+        # Set as root if no parent
+        if parent_name is None:
+            self._root = node
+
+        # Recursively process children
+        children = data.get("children", [])
+        if isinstance(children, list):
+            for child_data in children:
+                if isinstance(child_data, dict):
+                    child_name = child_data.get("id", "")
+                    if child_name:
+                        node.children_names.append(child_name)
+                        self._build_from_yfull_nested(child_data, parent_name=name)
+
+        # Calculate depths after building (only from root call)
+        if parent_name is None:
+            self._calculate_depths(self._root, 0)
+
+    def _build_from_flat_dict(self, data: dict) -> None:
+        """
+        Build tree from flat format: {"parent_name": ["child1", "child2", ...], ...}
+
+        Used for testing and simpler tree representations.
+        """
         # First pass: create all nodes
         all_names: set[str] = set()
         for parent, children in data.items():
             all_names.add(parent)
-            all_names.update(children)
+            if isinstance(children, list):
+                all_names.update(children)
 
         for name in all_names:
             self._nodes[name] = Node(name=name)
 
         # Second pass: establish relationships
         for parent_name, children_names in data.items():
+            if not isinstance(children_names, list):
+                continue
             parent_node = self._nodes[parent_name]
             parent_node.children_names = list(children_names)
 
@@ -134,7 +208,9 @@ class Tree:
             if self.ROOT_NAME in self._nodes:
                 self._root = self._nodes[self.ROOT_NAME]
             else:
-                raise ValueError(f"Expected 1 root node, found {len(roots)}: {[r.name for r in roots]}")
+                raise ValueError(
+                    f"Expected 1 root node, found {len(roots)}: {[r.name for r in roots]}"
+                )
         else:
             self._root = roots[0]
 
