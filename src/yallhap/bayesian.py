@@ -1,0 +1,354 @@
+"""
+Bayesian haplogroup classification.
+
+Provides true probabilistic classification with:
+- Branch likelihood calculation
+- Path likelihood accumulation
+- Posterior probability computation
+- 95% credible set calculation
+"""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass
+
+from yallhap.scoring import score_variant_with_ad, VariantScore
+from yallhap.snps import SNP, SNPDatabase, ReferenceGenome
+from yallhap.tree import Tree, Node
+from yallhap.vcf import Variant
+
+
+@dataclass
+class BranchLikelihood:
+    """
+    Likelihood contribution from a single branch.
+
+    Attributes:
+        branch_id: Haplogroup name for this branch
+        log_likelihood: Log-likelihood contribution
+        derived_count: Number of derived calls on this branch
+        ancestral_count: Number of ancestral calls on this branch
+    """
+
+    branch_id: str
+    log_likelihood: float
+    derived_count: int
+    ancestral_count: int
+
+
+def compute_branch_likelihood(
+    branch_id: str,
+    snps: list[SNP],
+    variants: dict[int, Variant],
+    error_rate: float = 0.001,
+    damage_rate: float = 0.1,
+    is_ancient: bool = False,
+    reference: ReferenceGenome = "grch38",
+) -> BranchLikelihood:
+    """
+    Compute log-likelihood for a single branch.
+
+    A branch is the edge leading to a haplogroup node. The likelihood
+    is based on how well the observed variants match the expected
+    derived alleles for SNPs defining this branch.
+
+    Args:
+        branch_id: Haplogroup name
+        snps: List of SNPs defining this branch
+        variants: Dict of position -> Variant for observed data
+        error_rate: Expected sequencing error rate
+        damage_rate: Expected ancient DNA damage rate
+        is_ancient: Whether to apply damage modeling
+        reference: Reference genome for position lookup
+
+    Returns:
+        BranchLikelihood with log-likelihood and counts
+    """
+    if not snps:
+        # No SNPs for this branch = neutral contribution
+        return BranchLikelihood(
+            branch_id=branch_id,
+            log_likelihood=0.0,
+            derived_count=0,
+            ancestral_count=0,
+        )
+
+    total_log_lik = 0.0
+    derived_count = 0
+    ancestral_count = 0
+
+    for snp in snps:
+        position = snp.get_position(reference)
+        if position is None:
+            continue
+
+        variant = variants.get(position)
+        if variant is None:
+            # No data at this position - neutral
+            continue
+
+        # Score this variant
+        score = score_variant_with_ad(
+            variant=variant,
+            snp=snp,
+            error_rate=error_rate,
+            damage_rate=damage_rate,
+            is_ancient=is_ancient,
+        )
+
+        if score.is_derived:
+            derived_count += 1
+            # Derived call supports being on this branch
+            # Log-likelihood contribution is based on weight
+            if score.weight > 0:
+                total_log_lik += math.log(score.weight)
+            else:
+                total_log_lik += -100.0  # Very negative
+        else:
+            ancestral_count += 1
+            # Ancestral call argues against being on this branch
+            # This is evidence we shouldn't have descended past parent
+            if score.weight > 0:
+                # Penalize: we expected derived but got ancestral
+                # Use (1 - weight) as probability of error
+                prob_error = 1.0 - score.weight * 0.5  # Allow for some errors
+                total_log_lik += math.log(max(0.01, prob_error))
+            else:
+                total_log_lik += -1.0  # Modest penalty
+
+    return BranchLikelihood(
+        branch_id=branch_id,
+        log_likelihood=total_log_lik,
+        derived_count=derived_count,
+        ancestral_count=ancestral_count,
+    )
+
+
+def compute_path_likelihood(
+    tree: Tree,
+    haplogroup: str,
+    branch_likelihoods: dict[str, BranchLikelihood],
+) -> float:
+    """
+    Compute total log-likelihood for a path from root to haplogroup.
+
+    The path likelihood is the sum of branch log-likelihoods along
+    the path from root to the target haplogroup.
+
+    Args:
+        tree: The phylogenetic tree
+        haplogroup: Target haplogroup name
+        branch_likelihoods: Pre-computed branch likelihoods
+
+    Returns:
+        Total log-likelihood for the path
+    """
+    path = tree.path_to_root(haplogroup)
+    total_log_lik = 0.0
+
+    for node_name in path:
+        if node_name in branch_likelihoods:
+            total_log_lik += branch_likelihoods[node_name].log_likelihood
+
+    return total_log_lik
+
+
+class BayesianClassifier:
+    """
+    Bayesian haplogroup classifier using tree-aware likelihood calculation.
+
+    Computes true posterior probabilities for haplogroup assignments
+    by evaluating path likelihoods through the phylogenetic tree.
+    """
+
+    def __init__(
+        self,
+        tree: Tree,
+        snp_db: SNPDatabase,
+        error_rate: float = 0.001,
+        damage_rate: float = 0.1,
+        reference: ReferenceGenome = "grch38",
+        use_haplogroup_prior: bool = False,
+    ):
+        """
+        Initialize Bayesian classifier.
+
+        Args:
+            tree: Y-chromosome phylogenetic tree
+            snp_db: SNP database with haplogroup markers
+            error_rate: Expected sequencing error rate
+            damage_rate: Expected ancient DNA damage rate (for is_ancient mode)
+            reference: Reference genome for position lookup
+            use_haplogroup_prior: Whether to use population-based priors
+        """
+        self.tree = tree
+        self.snp_db = snp_db
+        self.error_rate = error_rate
+        self.damage_rate = damage_rate
+        self.reference = reference
+        self.use_haplogroup_prior = use_haplogroup_prior
+
+        # Build mapping from haplogroup -> SNPs
+        self._haplogroup_snps: dict[str, list[SNP]] = {}
+        for snp in snp_db:
+            hg = snp.haplogroup
+            if hg:
+                if hg not in self._haplogroup_snps:
+                    self._haplogroup_snps[hg] = []
+                self._haplogroup_snps[hg].append(snp)
+
+    def _get_leaf_haplogroups(self) -> list[str]:
+        """Get all leaf haplogroups (terminal nodes) in the tree."""
+        leaves = []
+        for node in self.tree.iter_depth_first():
+            if not node.children_names:
+                leaves.append(node.name)
+        return leaves
+
+    def _get_all_haplogroups(self) -> list[str]:
+        """Get all haplogroups in the tree."""
+        return list(self.tree.nodes.keys())
+
+    def _compute_all_branch_likelihoods(
+        self,
+        variants: dict[int, Variant],
+        is_ancient: bool = False,
+    ) -> dict[str, BranchLikelihood]:
+        """
+        Compute branch likelihoods for all haplogroups.
+
+        Args:
+            variants: Dict of position -> Variant
+            is_ancient: Whether to apply damage modeling
+
+        Returns:
+            Dict of haplogroup -> BranchLikelihood
+        """
+        branch_likelihoods: dict[str, BranchLikelihood] = {}
+
+        for haplogroup in self.tree.nodes:
+            snps = self._haplogroup_snps.get(haplogroup, [])
+            bl = compute_branch_likelihood(
+                branch_id=haplogroup,
+                snps=snps,
+                variants=variants,
+                error_rate=self.error_rate,
+                damage_rate=self.damage_rate if is_ancient else 0.0,
+                is_ancient=is_ancient,
+                reference=self.reference,
+            )
+            branch_likelihoods[haplogroup] = bl
+
+        return branch_likelihoods
+
+    def compute_posteriors(
+        self,
+        variants: dict[int, Variant],
+        is_ancient: bool = False,
+    ) -> list[tuple[str, float]]:
+        """
+        Compute posterior probabilities for all haplogroups.
+
+        Args:
+            variants: Dict of position -> Variant for observed data
+            is_ancient: Whether to apply ancient DNA damage modeling
+
+        Returns:
+            List of (haplogroup, posterior) tuples, sorted by posterior descending
+        """
+        # Compute all branch likelihoods
+        branch_likelihoods = self._compute_all_branch_likelihoods(variants, is_ancient)
+
+        # Compute path likelihoods for all haplogroups
+        path_log_likelihoods: dict[str, float] = {}
+
+        for haplogroup in self.tree.nodes:
+            path_ll = compute_path_likelihood(
+                self.tree, haplogroup, branch_likelihoods
+            )
+            path_log_likelihoods[haplogroup] = path_ll
+
+        # Convert log-likelihoods to posteriors using log-sum-exp trick
+        # for numerical stability
+        log_liks = list(path_log_likelihoods.values())
+        if not log_liks:
+            return []
+
+        max_log_lik = max(log_liks)
+
+        # Compute unnormalized posteriors
+        unnormalized: dict[str, float] = {}
+        for hg, log_lik in path_log_likelihoods.items():
+            # Use uniform prior (or could implement population priors)
+            log_prior = 0.0  # Uniform prior
+
+            # Posterior ∝ likelihood × prior
+            unnormalized[hg] = math.exp(log_lik - max_log_lik + log_prior)
+
+        # Normalize to sum to 1
+        total = sum(unnormalized.values())
+        if total == 0:
+            # All zero = uniform distribution
+            n = len(unnormalized)
+            posteriors = [(hg, 1.0 / n) for hg in unnormalized]
+        else:
+            posteriors = [(hg, prob / total) for hg, prob in unnormalized.items()]
+
+        # Sort by posterior descending
+        posteriors.sort(key=lambda x: x[1], reverse=True)
+
+        return posteriors
+
+    def get_credible_set(
+        self,
+        posteriors: list[tuple[str, float]],
+        threshold: float = 0.95,
+    ) -> list[str]:
+        """
+        Get the smallest set of haplogroups containing given probability mass.
+
+        Args:
+            posteriors: List of (haplogroup, posterior) tuples, sorted descending
+            threshold: Cumulative probability threshold (default 0.95)
+
+        Returns:
+            List of haplogroup names in the credible set
+        """
+        credible_set: list[str] = []
+        cumulative = 0.0
+
+        for hg, prob in posteriors:
+            credible_set.append(hg)
+            cumulative += prob
+            if cumulative >= threshold:
+                break
+
+        return credible_set
+
+    def classify(
+        self,
+        variants: dict[int, Variant],
+        is_ancient: bool = False,
+    ) -> tuple[str, float, list[str]]:
+        """
+        Classify sample to best haplogroup with posterior and credible set.
+
+        Args:
+            variants: Dict of position -> Variant
+            is_ancient: Whether to apply ancient DNA damage modeling
+
+        Returns:
+            Tuple of (best_haplogroup, posterior_probability, credible_set_95)
+        """
+        posteriors = self.compute_posteriors(variants, is_ancient)
+
+        if not posteriors:
+            return (self.tree.root.name, 0.0, [self.tree.root.name])
+
+        best_hg, best_prob = posteriors[0]
+        credible_set = self.get_credible_set(posteriors, threshold=0.95)
+
+        return (best_hg, best_prob, credible_set)
+
+

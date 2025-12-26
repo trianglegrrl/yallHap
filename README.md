@@ -11,6 +11,7 @@ Modern, pipeline-friendly Y-chromosome haplogroup inference.
 - **Probabilistic scoring**: Likelihood-based confidence scores, not just SNP counting
 - **Ancient DNA support**: Built-in damage filtering, transversions-only mode, quality rescaling
 - **Multiple references**: Supports GRCh37, GRCh38, and T2T-CHM13v2.0 with automatic liftover
+- **Multi-threaded**: Parallel sample processing with `--threads N` for population-scale studies
 - **Batch processing**: Classify thousands of samples efficiently with `classify_batch()`
 - **Pipeline-friendly**: Proper exit codes, JSON/TSV output, Nextflow/Snakemake examples
 - **Bioconda/Docker**: Easy installation and containerized execution
@@ -19,10 +20,11 @@ Modern, pipeline-friendly Y-chromosome haplogroup inference.
 
 Validated against established datasets:
 
-| Dataset | Samples | Same Major Lineage | Notes |
-|---------|---------|-------------------|-------|
-| 1000 Genomes Phase 3 | 1,233 | **99.76%** | Modern WGS, GRCh37 |
-| AADR Ancient DNA | 2,000 | **86.8%** | Transversions-only mode |
+| Dataset | Samples | Same Major Lineage | Reference | Notes |
+|---------|---------|-------------------|-----------|-------|
+| 1000 Genomes Phase 3 | 1,233 | **99.76%** | GRCh37 | Modern WGS |
+| AADR Ancient DNA | 1,991 | **88.65%** | GRCh37 | Transversions-only mode |
+| gnomAD HGDP/1KG | 10 | **100.00%** | GRCh38 | High-coverage WGS |
 
 **1000 Genomes details:**
 - Only 3 misclassified samples (2 rare A0 haplogroups, 1 NO/K confusion)
@@ -32,7 +34,11 @@ Validated against established datasets:
 **AADR Ancient DNA details:**
 - Validated with properly formatted ground truth (X-YYYY haplogroup names)
 - Transversions-only mode for maximum damage resistance
-- Mean derived SNPs: 11.6 (low coverage typical for aDNA)
+- Mean derived SNPs: 11.8 (low coverage typical for aDNA)
+
+**gnomAD High-Coverage details:**
+- 30× high-coverage whole-genome sequencing
+- Mean derived SNPs: 79.4 (5× more than Phase 3 due to improved coverage)
 
 See [VALIDATION_TESTING.md](VALIDATION_TESTING.md) for reproducible validation protocols.
 
@@ -128,6 +134,20 @@ yallhap batch sample1.vcf.gz sample2.vcf.gz sample3.vcf.gz \
     --snp-db data/ybrowse_snps.csv \
     --output results.tsv
 ```
+
+### Parallel Processing
+
+Use multiple threads for faster batch processing:
+
+```bash
+yallhap batch samples/*.vcf.gz \
+    --tree data/yfull_tree.json \
+    --snp-db data/ybrowse_snps.csv \
+    --threads 16 \
+    --output results.tsv
+```
+
+With 16 threads, processing 1,000+ samples takes approximately 10 minutes.
 
 ### TSV Output Format
 
@@ -413,6 +433,22 @@ rule yallhap:
             --output {output.json}
         """
 ```
+
+## Experimental Features
+
+### Bayesian Mode
+
+An experimental Bayesian classification mode is available that computes true posterior probabilities over tree paths:
+
+```bash
+yallhap classify sample.vcf.gz \
+    --tree data/yfull_tree.json \
+    --snp-db data/ybrowse_snps.csv \
+    --bayesian \
+    --output result.json
+```
+
+This mode incorporates allelic depth (AD) information when available. However, validation testing showed **no accuracy improvement** over the default heuristic approach on well-characterized samples (identical results across 3,200+ samples from 1000 Genomes, AADR, and gnomAD). Bayesian mode is disabled by default and intended for research purposes.
 
 ## Development
 

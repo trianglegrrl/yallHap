@@ -1,0 +1,1079 @@
+#!/usr/bin/env python3
+"""
+Run comprehensive benchmarks comparing yallHap performance across datasets.
+
+This script validates yallHap against three primary datasets:
+1. 1000 Genomes Phase 3 (GRCh37) - 1,233 modern males
+2. AADR v54 (GRCh37) - Ancient DNA samples with transversions-only mode
+3. gnomAD HGDP/1000G (GRCh38) - High-coverage with AD fields for Bayesian mode
+
+Output:
+- Console summary table
+- JSON results for paper/benchmark_results.json
+- Detailed per-sample TSV for paper/benchmark_detailed.tsv
+
+Usage:
+    # Full benchmark (all samples)
+    python scripts/run_benchmarks.py
+
+    # Quick benchmark with subsampling and threading
+    python scripts/run_benchmarks.py --subsample 50 --threads 16
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import random
+import sys
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+
+# Progress bar support (optional)
+try:
+    from tqdm import tqdm
+
+    TQDM_AVAILABLE = True
+except ImportError:
+    TQDM_AVAILABLE = False
+    tqdm = None  # type: ignore
+
+
+def run_with_progress(
+    cmd: list[str],
+    desc: str,
+    output_file: Path | None = None,
+    source_file: Path | None = None,
+) -> None:
+    """
+    Run a subprocess with a progress indicator.
+
+    Shows elapsed time and optionally output file size growth.
+    Uses tqdm if available, otherwise prints status updates.
+
+    Args:
+        cmd: Command to run
+        desc: Description to show
+        output_file: Optional output file to monitor for size progress
+        source_file: Optional source file to estimate progress from
+    """
+    import subprocess
+    import threading
+
+    # Get source file size for progress estimation
+    source_size = source_file.stat().st_size if source_file and source_file.exists() else None
+
+    # Start the process
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    if TQDM_AVAILABLE and output_file:
+        # Show progress bar based on output file size
+        # Estimate: output will be ~1-10% of input for filtered extraction
+        estimated_size = source_size // 50 if source_size else None  # ~2% estimate
+
+        with tqdm(
+            total=estimated_size,
+            desc=f"    {desc}",
+            unit="B",
+            unit_scale=True,
+            unit_divisor=1024,
+            leave=False,
+            bar_format="{desc}: {n_fmt}/{total_fmt} [{elapsed}<{remaining}]" if estimated_size else "{desc}: {n_fmt} [{elapsed}]",
+        ) as pbar:
+            last_size = 0
+            while process.poll() is None:
+                if output_file.exists():
+                    current_size = output_file.stat().st_size
+                    pbar.update(current_size - last_size)
+                    last_size = current_size
+                time.sleep(0.5)
+
+            # Final update
+            if output_file.exists():
+                final_size = output_file.stat().st_size
+                pbar.update(final_size - last_size)
+                # Update total to actual if we underestimated
+                if estimated_size and final_size > estimated_size:
+                    pbar.total = final_size
+                    pbar.refresh()
+    else:
+        # Fallback: print status with elapsed time
+        start = time.time()
+        while process.poll() is None:
+            elapsed = time.time() - start
+            size_str = ""
+            if output_file and output_file.exists():
+                size_mb = output_file.stat().st_size / (1024 * 1024)
+                size_str = f" ({size_mb:.1f} MB)"
+            print(f"\r    {desc}: {elapsed:.0f}s{size_str}...", end="", flush=True)
+            time.sleep(1)
+        print()  # Newline after progress
+
+    # Check for errors
+    stdout, stderr = process.communicate()
+    if process.returncode != 0:
+        raise subprocess.CalledProcessError(process.returncode, cmd, stdout, stderr)
+
+
+@dataclass
+class BenchmarkResult:
+    """Results for a single tool/dataset combination."""
+
+    tool_name: str
+    dataset: str
+    total_samples: int
+    same_major_lineage: int
+    exact_match: int
+    runtime_seconds: float
+    mean_confidence: float | None = None
+    mean_derived_snps: float | None = None
+    notes: list[str] = field(default_factory=list)
+
+    @property
+    def major_lineage_rate(self) -> float:
+        """Percentage with same major haplogroup letter."""
+        if self.total_samples == 0:
+            return 0.0
+        return 100 * self.same_major_lineage / self.total_samples
+
+    @property
+    def exact_match_rate(self) -> float:
+        """Percentage with exact haplogroup match."""
+        if self.total_samples == 0:
+            return 0.0
+        return 100 * self.exact_match / self.total_samples
+
+
+def load_ground_truth(path: Path, haplogroup_col: str = "haplogroup") -> dict[str, str]:
+    """Load ground truth haplogroups from TSV file."""
+    ground_truth = {}
+    with open(path) as f:
+        reader = csv.DictReader(f, delimiter="\t")
+        for row in reader:
+            sample_id = row.get("sample_id", row.get("sample", ""))
+            haplogroup = row.get(haplogroup_col, row.get("haplogroup", ""))
+            if sample_id and haplogroup:
+                ground_truth[sample_id] = haplogroup
+    return ground_truth
+
+
+def compare_haplogroups(
+    ground_truth: dict[str, str],
+    predictions: dict[str, str],
+) -> tuple[int, int, int]:
+    """
+    Compare predictions to ground truth.
+
+    Returns (same_major_lineage_count, exact_match_count, total_compared)
+    """
+    same_major = 0
+    exact = 0
+    total = 0
+
+    for sample_id, gt_hg in ground_truth.items():
+        if sample_id not in predictions:
+            continue
+
+        pred_hg = predictions[sample_id]
+        if not pred_hg or pred_hg == "NA":
+            continue
+
+        total += 1
+
+        # Extract first letter for major lineage comparison
+        gt_major = gt_hg[0].upper() if gt_hg else ""
+        pred_major = pred_hg[0].upper() if pred_hg else ""
+
+        if gt_major == pred_major:
+            same_major += 1
+
+        # Exact match (case-insensitive)
+        if gt_hg.lower() == pred_hg.lower():
+            exact += 1
+
+    return same_major, exact, total
+
+
+def run_yallhap_classification(
+    vcf_path: Path,
+    tree_path: Path,
+    snp_db_path: Path,
+    samples: list[str],
+    reference: str = "grch37",
+    bayesian: bool = False,
+    ancient_mode: bool = False,
+    transversions_only: bool = False,
+    min_depth: int = 1,
+    threads: int = 1,
+) -> tuple[dict[str, str], float, float, float]:
+    """
+    Run yallHap classification on samples.
+
+    Args:
+        vcf_path: Path to VCF file
+        tree_path: Path to tree JSON
+        snp_db_path: Path to SNP database CSV
+        samples: List of sample IDs to classify
+        reference: Reference genome (grch37, grch38, t2t)
+        bayesian: Use Bayesian classifier
+        ancient_mode: Enable ancient DNA mode
+        transversions_only: Only use transversions
+        min_depth: Minimum read depth
+        threads: Number of parallel threads for batch processing
+
+    Returns (predictions, runtime, mean_confidence, mean_derived_snps)
+    """
+    from yallhap.classifier import HaplogroupClassifier
+    from yallhap.snps import SNPDatabase
+    from yallhap.tree import Tree
+
+    # Load resources
+    tree = Tree.from_json(tree_path)
+    snp_db = SNPDatabase.from_ybrowse_gff_csv(snp_db_path)
+
+    classifier = HaplogroupClassifier(
+        tree=tree,
+        snp_db=snp_db,
+        reference=reference,
+        bayesian=bayesian,
+        ancient_mode=ancient_mode,
+        transversions_only=transversions_only,
+        min_depth=min_depth,
+    )
+
+    # Run classification with optional parallelism and progress bar
+    start_time = time.time()
+
+    mode_str = "Bayesian" if bayesian else "Heuristic"
+    desc = f"    {mode_str} ({threads} threads)"
+
+    if TQDM_AVAILABLE:
+        pbar = tqdm(total=len(samples), desc=desc, unit="samples", leave=False)
+
+        def progress_callback() -> None:
+            pbar.update(1)
+
+        results = classifier.classify_batch(
+            vcf_path, samples, threads=threads, progress_callback=progress_callback
+        )
+        pbar.close()
+    else:
+        print(f"{desc}: classifying {len(samples)} samples...")
+        results = classifier.classify_batch(vcf_path, samples, threads=threads)
+
+    runtime = time.time() - start_time
+
+    # Extract predictions and statistics
+    predictions = {}
+    confidences = []
+    derived_counts = []
+
+    for result in results:
+        predictions[result.sample] = result.haplogroup
+        if result.confidence is not None:
+            confidences.append(result.confidence)
+        if result.snp_stats and result.snp_stats.derived > 0:
+            derived_counts.append(result.snp_stats.derived)
+
+    mean_conf = sum(confidences) / len(confidences) if confidences else 0.0
+    mean_derived = sum(derived_counts) / len(derived_counts) if derived_counts else 0.0
+
+    return predictions, runtime, mean_conf, mean_derived
+
+
+def benchmark_1kg(
+    base_dir: Path,
+    subsample: int | None = None,
+    threads: int = 1,
+    shared_samples: list[str] | None = None,
+) -> tuple[BenchmarkResult | None, BenchmarkResult | None]:
+    """Run 1000 Genomes Phase 3 benchmark with heuristic and Bayesian modes."""
+    validation_dir = base_dir / "data" / "validation"
+    data_dir = base_dir / "data"
+
+    ground_truth_path = validation_dir / "poznik2016_haplogroups.tsv"
+    vcf_path = validation_dir / "1kg_chrY_phase3.vcf.gz"
+    tree_path = data_dir / "yfull_tree.json"
+    snp_db_path = validation_dir / "ybrowse_snps_hg19.csv"
+
+    # Check required files
+    for path in [ground_truth_path, vcf_path, tree_path, snp_db_path]:
+        if not path.exists():
+            print(f"  SKIP: {path.name} not found")
+            return None, None
+
+    # Load ground truth
+    ground_truth = load_ground_truth(ground_truth_path)
+
+    # Use shared_samples if provided (for cross-dataset comparison)
+    if shared_samples:
+        samples = [s for s in shared_samples if s in ground_truth]
+    else:
+        samples = list(ground_truth.keys())
+        # Subsample if requested
+        if subsample and len(samples) > subsample:
+            random.seed(42)
+            samples = random.sample(samples, subsample)
+
+    print(f"  Loaded {len(samples)} samples")
+
+    # Run yallHap heuristic mode
+    heur_preds, heur_runtime, heur_conf, heur_derived = run_yallhap_classification(
+        vcf_path=vcf_path,
+        tree_path=tree_path,
+        snp_db_path=snp_db_path,
+        samples=samples,
+        reference="grch37",
+        bayesian=False,
+        threads=threads,
+    )
+    heur_major, heur_exact, heur_total = compare_haplogroups(ground_truth, heur_preds)
+
+    heuristic_result = BenchmarkResult(
+        tool_name="yallHap",
+        dataset="1000G Phase 3",
+        total_samples=heur_total,
+        same_major_lineage=heur_major,
+        exact_match=heur_exact,
+        runtime_seconds=heur_runtime,
+        mean_confidence=heur_conf,
+        mean_derived_snps=heur_derived,
+        notes=["GRCh37 reference", "Heuristic mode"],
+    )
+
+    # Run yallHap Bayesian mode
+    bayes_preds, bayes_runtime, bayes_conf, bayes_derived = run_yallhap_classification(
+        vcf_path=vcf_path,
+        tree_path=tree_path,
+        snp_db_path=snp_db_path,
+        samples=samples,
+        reference="grch37",
+        bayesian=True,
+        threads=threads,
+    )
+    bayes_major, bayes_exact, bayes_total = compare_haplogroups(ground_truth, bayes_preds)
+
+    bayesian_result = BenchmarkResult(
+        tool_name="yallHap-Bayes",
+        dataset="1000G Phase 3",
+        total_samples=bayes_total,
+        same_major_lineage=bayes_major,
+        exact_match=bayes_exact,
+        runtime_seconds=bayes_runtime,
+        mean_confidence=bayes_conf,
+        mean_derived_snps=bayes_derived,
+        notes=["GRCh37 reference", "Bayesian mode"],
+    )
+
+    return heuristic_result, bayesian_result
+
+
+def benchmark_aadr(
+    base_dir: Path, subsample: int | None = None, threads: int = 1
+) -> tuple[BenchmarkResult | None, BenchmarkResult | None]:
+    """Run AADR ancient DNA benchmark with heuristic and Bayesian modes."""
+    ancient_dir = base_dir / "data" / "ancient"
+    data_dir = base_dir / "data"
+    validation_dir = base_dir / "data" / "validation"
+
+    ground_truth_path = ancient_dir / "aadr_1240k_ground_truth.tsv"
+    vcf_path = ancient_dir / "aadr_chrY_v2.vcf.gz"
+    tree_path = data_dir / "yfull_tree.json"
+    snp_db_path = validation_dir / "ybrowse_snps_hg19.csv"
+
+    # Check required files
+    for path in [ground_truth_path, vcf_path, tree_path, snp_db_path]:
+        if not path.exists():
+            print(f"  SKIP: {path.name} not found")
+            return None, None
+
+    # Load ground truth - filter to proper haplogroup format
+    raw_ground_truth = load_ground_truth(ground_truth_path, "haplogroup_terminal")
+    ground_truth = {}
+    for sample_id, hg in raw_ground_truth.items():
+        # Only keep proper haplogroup names (X-YYYY format)
+        if hg and "-" in hg and hg[0].isalpha():
+            ground_truth[sample_id] = hg
+
+    # Get samples in VCF
+    import pysam
+
+    vcf = pysam.VariantFile(str(vcf_path))
+    vcf_samples = set(vcf.header.samples)
+    vcf.close()
+
+    samples = [s for s in ground_truth.keys() if s in vcf_samples]
+
+    # Subsample if requested, otherwise cap at 2000
+    max_samples = subsample if subsample else 2000
+    if len(samples) > max_samples:
+        random.seed(42)
+        samples = random.sample(samples, max_samples)
+
+    print(f"  Loaded {len(samples)} samples (filtered to X-YYYY format)")
+
+    # Run yallHap heuristic mode with transversions-only
+    heur_preds, heur_runtime, heur_conf, heur_derived = run_yallhap_classification(
+        vcf_path=vcf_path,
+        tree_path=tree_path,
+        snp_db_path=snp_db_path,
+        samples=samples,
+        reference="grch37",
+        bayesian=False,
+        transversions_only=True,
+        threads=threads,
+    )
+    heur_major, heur_exact, heur_total = compare_haplogroups(ground_truth, heur_preds)
+
+    heuristic_result = BenchmarkResult(
+        tool_name="yallHap",
+        dataset="AADR v54",
+        total_samples=heur_total,
+        same_major_lineage=heur_major,
+        exact_match=heur_exact,
+        runtime_seconds=heur_runtime,
+        mean_confidence=heur_conf,
+        mean_derived_snps=heur_derived,
+        notes=["GRCh37 reference", "Transversions-only mode", "Ancient DNA"],
+    )
+
+    # Run yallHap Bayesian mode with transversions-only and ancient flag
+    bayes_preds, bayes_runtime, bayes_conf, bayes_derived = run_yallhap_classification(
+        vcf_path=vcf_path,
+        tree_path=tree_path,
+        snp_db_path=snp_db_path,
+        samples=samples,
+        reference="grch37",
+        bayesian=True,
+        transversions_only=True,
+        ancient_mode=True,
+        threads=threads,
+    )
+    bayes_major, bayes_exact, bayes_total = compare_haplogroups(ground_truth, bayes_preds)
+
+    bayesian_result = BenchmarkResult(
+        tool_name="yallHap-Bayes",
+        dataset="AADR v54",
+        total_samples=bayes_total,
+        same_major_lineage=bayes_major,
+        exact_match=bayes_exact,
+        runtime_seconds=bayes_runtime,
+        mean_confidence=bayes_conf,
+        mean_derived_snps=bayes_derived,
+        notes=["GRCh37 reference", "Bayesian + transversions-only", "Ancient DNA"],
+    )
+
+    return heuristic_result, bayesian_result
+
+
+def benchmark_gnomad_highcov(
+    base_dir: Path,
+    subsample: int | None = None,
+    threads: int = 1,
+    shared_samples: list[str] | None = None,
+) -> tuple[BenchmarkResult | None, BenchmarkResult | None]:
+    """
+    Run gnomAD high-coverage benchmark with heuristic and Bayesian modes.
+
+    Args:
+        base_dir: Project base directory
+        subsample: Max samples to use
+        threads: Parallel threads
+        shared_samples: If provided, use these specific samples (for cross-dataset comparison)
+
+    Returns (heuristic_result, bayesian_result)
+    """
+    highcov_dir = base_dir / "data" / "validation_highcov"
+    data_dir = base_dir / "data"
+    validation_dir = base_dir / "data" / "validation"
+
+    # Use 1KG Phase 3 ground truth for cross-dataset comparison
+    ground_truth_path = validation_dir / "poznik2016_haplogroups.tsv"
+    full_vcf_path = highcov_dir / "vcf" / "gnomad.genomes.v3.1.2.hgdp_tgp.chrY.vcf.bgz"
+
+    tree_path = data_dir / "yfull_tree.json"
+    snp_db_path = data_dir / "ybrowse_snps.csv"
+
+    # Check required files
+    for path in [tree_path, snp_db_path]:
+        if not path.exists():
+            print(f"  SKIP: {path.name} not found")
+            return None, None, None
+
+    if not full_vcf_path.exists():
+        print("  SKIP: gnomAD VCF not found")
+        return None, None, None
+
+    # Load ground truth from 1KG Phase 3 (same as benchmark_1kg)
+    if not ground_truth_path.exists():
+        print("  SKIP: Ground truth not found")
+        return None, None, None
+
+    ground_truth = load_ground_truth(ground_truth_path)
+
+    # Get available samples from gnomAD VCF
+    import pysam
+
+    vcf = pysam.VariantFile(str(full_vcf_path))
+    vcf_samples = set(vcf.header.samples)
+    vcf.close()
+
+    # Use shared_samples if provided (for cross-dataset comparison)
+    if shared_samples:
+        samples = [s for s in shared_samples if s in vcf_samples]
+    else:
+        # Find overlap between ground truth and gnomAD samples
+        samples = [s for s in ground_truth.keys() if s in vcf_samples]
+
+        # Subsample if requested
+        if subsample and len(samples) > subsample:
+            random.seed(42)
+            samples = random.sample(samples, subsample)
+
+    # Create or reuse subset VCF with exactly the samples we need
+    import subprocess
+
+    # Create subset VCF: extract samples AND filter to diagnostic positions
+    # Use -T (targets) instead of -R (regions) - streams instead of seeking
+    subset_vcf_path = highcov_dir / "vcf" / f"gnomad_subset_{len(samples)}_filtered.vcf.gz"
+
+    if subset_vcf_path.exists():
+        vcf_path = subset_vcf_path
+        print(f"  Using cached subset: {subset_vcf_path.name}")
+    else:
+        subset_start = time.time()
+        sample_list = ",".join(samples)
+
+        # Create targets file with diagnostic SNP positions (if not exists)
+        # Format: chrY<TAB>position (1-based)
+        from yallhap.snps import SNPDatabase
+
+        targets_path = highcov_dir / "vcf" / "diagnostic_positions.tsv"
+        if not targets_path.exists():
+            print(f"  Creating diagnostic positions file...")
+            snp_db = SNPDatabase.from_ybrowse_gff_csv(snp_db_path)
+            positions = set()
+            for snp in snp_db:
+                pos = snp.get_position("grch38")
+                if pos and 2700000 <= pos <= 60000000:
+                    positions.add(pos)
+            # Write sorted positions
+            with open(targets_path, "w") as f:
+                for pos in sorted(positions):
+                    f.write(f"chrY\t{pos}\n")
+            print(f"    Created {len(positions)} target positions")
+
+        desc = f"Extracting {len(samples)} samples + filtering"
+        # -T streams through file (fast), -R uses index seeking (slow for many regions)
+        bcftools_cmd = [
+            "bcftools", "view",
+            "-s", sample_list,
+            "-T", str(targets_path),
+            "-Oz", "-o", str(subset_vcf_path),
+            str(full_vcf_path),
+        ]
+
+        try:
+            run_with_progress(
+                bcftools_cmd,
+                desc=desc,
+                output_file=subset_vcf_path,
+                source_file=full_vcf_path,
+            )
+            print(f"    Indexing subset VCF...")
+            subprocess.run(
+                ["tabix", "-f", str(subset_vcf_path)],
+                check=True,
+                capture_output=True,
+            )
+            vcf_path = subset_vcf_path
+            subset_time = time.time() - subset_start
+            print(f"  Created {subset_vcf_path.name} ({subset_time:.1f}s)")
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            print(f"  Warning: Could not create subset VCF: {e}")
+            print("  Using full VCF (slow)...")
+            vcf_path = full_vcf_path
+
+    print(f"  Loaded {len(samples)} samples with ground truth")
+
+    if not samples:
+        print("  SKIP: No samples found in VCF")
+        return None, None, None
+
+    # Run heuristic mode
+    heur_predictions, heur_runtime, heur_conf, heur_derived = run_yallhap_classification(
+        vcf_path=vcf_path,
+        tree_path=tree_path,
+        snp_db_path=snp_db_path,
+        samples=samples,
+        reference="grch38",
+        bayesian=False,
+        threads=threads,
+    )
+
+    heur_same, heur_exact, heur_total = compare_haplogroups(ground_truth, heur_predictions)
+
+    heuristic_result = BenchmarkResult(
+        tool_name="yallHap",
+        dataset="gnomAD HGDP/1KG",
+        total_samples=heur_total,
+        same_major_lineage=heur_same,
+        exact_match=heur_exact,
+        runtime_seconds=heur_runtime,
+        mean_confidence=heur_conf,
+        mean_derived_snps=heur_derived,
+        notes=["GRCh38 reference", "Heuristic mode", "High-coverage WGS"],
+    )
+
+    # Run Bayesian mode
+    bayes_predictions, bayes_runtime, bayes_conf, bayes_derived = run_yallhap_classification(
+        vcf_path=vcf_path,
+        tree_path=tree_path,
+        snp_db_path=snp_db_path,
+        samples=samples,
+        reference="grch38",
+        bayesian=True,
+        threads=threads,
+    )
+
+    bayes_same, bayes_exact, bayes_total = compare_haplogroups(ground_truth, bayes_predictions)
+
+    bayesian_result = BenchmarkResult(
+        tool_name="yallHap-Bayesian",
+        dataset="gnomAD HGDP/1KG",
+        total_samples=bayes_total,
+        same_major_lineage=bayes_same,
+        exact_match=bayes_exact,
+        runtime_seconds=bayes_runtime,
+        mean_confidence=bayes_conf,
+        mean_derived_snps=bayes_derived,
+        notes=["GRCh38 reference", "Bayesian mode with AD", "High-coverage WGS"],
+    )
+
+    # Note: Yleaf comparison runs on 1KG Phase 3 (hg19) separately
+    # gnomAD VCF format causes issues with Yleaf's parsing
+
+    return heuristic_result, bayesian_result
+
+
+def run_yleaf(
+    vcf_path: Path,
+    samples: list[str],
+    reference: str = "grch38",
+) -> dict[str, str] | None:
+    """
+    Run Yleaf on samples and return predictions.
+
+    Returns None if Yleaf is not installed.
+    """
+    import shutil
+    import subprocess
+    import tempfile
+
+    # Check if Yleaf is installed
+    yleaf_path = shutil.which("Yleaf")
+    if not yleaf_path:
+        return None
+
+    predictions = {}
+
+    # Yleaf processes one sample at a time
+    for sample in samples:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Extract single sample VCF
+            sample_vcf = Path(tmpdir) / f"{sample}.vcf.gz"
+            try:
+                subprocess.run(
+                    ["bcftools", "view", "-s", sample, "-Oz", "-o", str(sample_vcf), str(vcf_path)],
+                    check=True,
+                    capture_output=True,
+                )
+                subprocess.run(
+                    ["tabix", "-f", str(sample_vcf)],
+                    check=True,
+                    capture_output=True,
+                )
+
+                # Run Yleaf
+                output_dir = Path(tmpdir) / "yleaf_out"
+                result = subprocess.run(
+                    [
+                        "Yleaf",
+                        "-vcf", str(sample_vcf),
+                        "-o", str(output_dir),
+                        "-rg", "hg38" if reference == "grch38" else "hg19",
+                    ],
+                    capture_output=True,
+                    timeout=30,  # 30s should be plenty for a single chrY VCF
+                )
+
+                # Parse Yleaf output - hg_prediction.hg
+                # Format: Sample_name\tHg\tHg_marker\tTotal_reads\tValid_markers\tQC-score...
+                hg_file = output_dir / "hg_prediction.hg"
+                if hg_file.exists():
+                    with open(hg_file) as f:
+                        for line in f:
+                            if line.startswith("Sample_name"):
+                                continue  # Skip header
+                            parts = line.strip().split("\t")
+                            if len(parts) >= 2:
+                                predictions[sample] = parts[1]
+                                break
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
+                continue
+
+    return predictions if predictions else None
+
+
+def benchmark_yleaf(
+    base_dir: Path,
+    vcf_path: Path,
+    ground_truth: dict[str, str],
+    samples: list[str],
+    reference: str = "grch38",
+    dataset_name: str = "gnomAD HGDP/1KG",
+) -> BenchmarkResult | None:
+    """Run Yleaf benchmark."""
+    start_time = time.time()
+    predictions = run_yleaf(vcf_path, samples, reference=reference)
+    runtime = time.time() - start_time
+
+    if predictions is None:
+        return None
+
+    same_major, exact, total = compare_haplogroups(ground_truth, predictions)
+
+    return BenchmarkResult(
+        tool_name="Yleaf",
+        dataset=dataset_name,
+        total_samples=total,
+        same_major_lineage=same_major,
+        exact_match=exact,
+        runtime_seconds=runtime,
+        notes=[f"{reference.upper()} reference", "External tool comparison"],
+    )
+
+
+def benchmark_yleaf_1kg(
+    base_dir: Path,
+    subsample: int | None = None,
+    shared_samples: list[str] | None = None,
+) -> BenchmarkResult | None:
+    """Run Yleaf benchmark on 1000 Genomes Phase 3 (hg19)."""
+    validation_dir = base_dir / "data" / "validation"
+
+    ground_truth_path = validation_dir / "poznik2016_haplogroups.tsv"
+    vcf_path = validation_dir / "1kg_chrY_phase3.vcf.gz"
+
+    if not ground_truth_path.exists() or not vcf_path.exists():
+        return None
+
+    ground_truth = load_ground_truth(ground_truth_path)
+
+    if shared_samples:
+        samples = [s for s in shared_samples if s in ground_truth]
+    else:
+        samples = list(ground_truth.keys())
+        if subsample and len(samples) > subsample:
+            random.seed(42)
+            samples = random.sample(samples, subsample)
+
+    return benchmark_yleaf(
+        base_dir=base_dir,
+        vcf_path=vcf_path,
+        ground_truth={s: ground_truth[s] for s in samples if s in ground_truth},
+        samples=samples,
+        reference="grch37",
+        dataset_name="1KG Phase 3",
+    )
+
+
+def print_results_table(results: list[BenchmarkResult]) -> None:
+    """Print formatted results table."""
+    print("\n" + "=" * 95)
+    print("BENCHMARK RESULTS")
+    print("=" * 95)
+    print()
+    print(f"{'Dataset':<20} {'Tool':<18} {'Samples':>8} {'Major Match':>12} {'Exact':>8} {'Conf':>6} {'SNPs':>6}")
+    print("-" * 95)
+
+    for r in results:
+        conf_str = f"{r.mean_confidence:.2f}" if r.mean_confidence else "N/A"
+        snps_str = f"{r.mean_derived_snps:.1f}" if r.mean_derived_snps else "N/A"
+        print(
+            f"{r.dataset:<20} {r.tool_name:<18} {r.total_samples:>8} "
+            f"{r.major_lineage_rate:>10.2f}% {r.exact_match_rate:>6.2f}% "
+            f"{conf_str:>6} {snps_str:>6}"
+        )
+
+    print("-" * 95)
+
+
+def save_results(base_dir: Path, results: list[BenchmarkResult]) -> None:
+    """Save results to JSON and TSV files."""
+    paper_dir = base_dir / "paper"
+    paper_dir.mkdir(parents=True, exist_ok=True)
+
+    # JSON output
+    json_path = paper_dir / "benchmark_results.json"
+    json_data = {
+        "generated": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "results": [],
+    }
+
+    for r in results:
+        json_data["results"].append({
+            "dataset": r.dataset,
+            "tool": r.tool_name,
+            "total_samples": r.total_samples,
+            "same_major_lineage": r.same_major_lineage,
+            "same_major_lineage_pct": round(r.major_lineage_rate, 2),
+            "exact_match": r.exact_match,
+            "exact_match_pct": round(r.exact_match_rate, 2),
+            "runtime_seconds": round(r.runtime_seconds, 1),
+            "mean_confidence": round(r.mean_confidence, 3) if r.mean_confidence else None,
+            "mean_derived_snps": round(r.mean_derived_snps, 1) if r.mean_derived_snps else None,
+            "notes": r.notes,
+        })
+
+    with open(json_path, "w") as f:
+        json.dump(json_data, f, indent=2)
+    print(f"\nResults saved to: {json_path}")
+
+    # TSV summary
+    tsv_path = paper_dir / "benchmark_summary.tsv"
+    with open(tsv_path, "w") as f:
+        f.write("dataset\ttool\tsamples\tmajor_match_pct\texact_match_pct\tconfidence\tderived_snps\n")
+        for r in results:
+            conf = f"{r.mean_confidence:.3f}" if r.mean_confidence else ""
+            snps = f"{r.mean_derived_snps:.1f}" if r.mean_derived_snps else ""
+            f.write(
+                f"{r.dataset}\t{r.tool_name}\t{r.total_samples}\t"
+                f"{r.major_lineage_rate:.2f}\t{r.exact_match_rate:.2f}\t{conf}\t{snps}\n"
+            )
+    print(f"Summary saved to: {tsv_path}")
+
+
+def parse_args() -> argparse.Namespace:
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(
+        description="Run yallHap benchmark suite across validation datasets",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+    # Full benchmark (all samples)
+    python scripts/run_benchmarks.py
+
+    # Quick benchmark with 50 samples per dataset
+    python scripts/run_benchmarks.py --subsample 50
+
+    # Fast benchmark with 50 samples and 16 threads
+    python scripts/run_benchmarks.py --subsample 50 --threads 16
+""",
+    )
+    parser.add_argument(
+        "--subsample",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Limit each dataset to N samples (default: use all)",
+    )
+    parser.add_argument(
+        "--threads",
+        type=int,
+        default=1,
+        metavar="N",
+        help="Number of parallel threads for classification (default: 1)",
+    )
+    parser.add_argument(
+        "--gnomad-samples",
+        type=int,
+        default=10,
+        metavar="N",
+        help="Number of gnomAD high-coverage samples, balanced by superpopulation (default: 10)",
+    )
+    return parser.parse_args()
+
+
+def find_shared_samples(
+    base_dir: Path,
+    subsample: int | None = None,
+    gnomad_samples: int = 10,
+) -> tuple[list[str], list[str]]:
+    """
+    Find samples for 1KG and gnomAD benchmarks.
+
+    For gnomAD, selects samples balanced by superpopulation from those
+    that exist in both 1KG Phase 3 ground truth AND gnomAD VCF.
+
+    Args:
+        base_dir: Project base directory
+        subsample: Max samples for 1KG benchmark (None = all)
+        gnomad_samples: Number of gnomAD samples, balanced by superpopulation
+
+    Returns:
+        (1kg_samples, gnomad_shared_samples)
+    """
+    import pysam
+
+    validation_dir = base_dir / "data" / "validation"
+    highcov_dir = base_dir / "data" / "validation_highcov"
+
+    ground_truth_path = validation_dir / "poznik2016_haplogroups.tsv"
+    panel_path = validation_dir / "1kg_sample_panel.txt"
+    gnomad_vcf_path = highcov_dir / "vcf" / "gnomad.genomes.v3.1.2.hgdp_tgp.chrY.vcf.bgz"
+
+    if not ground_truth_path.exists():
+        return [], []
+
+    # Load ground truth samples
+    ground_truth = load_ground_truth(ground_truth_path)
+
+    # Load population info
+    sample_to_superpop: dict[str, str] = {}
+    if panel_path.exists():
+        with open(panel_path) as f:
+            for line in f:
+                if line.startswith("sample"):
+                    continue
+                parts = line.strip().split("\t")
+                if len(parts) >= 4 and parts[3] == "male":
+                    sample_to_superpop[parts[0]] = parts[2]  # super_pop
+
+    # 1KG samples (all males with ground truth, optionally subsampled)
+    kg_samples = list(ground_truth.keys())
+    if subsample and len(kg_samples) > subsample:
+        random.seed(42)
+        kg_samples = random.sample(kg_samples, subsample)
+
+    # gnomAD shared samples - balanced by superpopulation
+    gnomad_shared: list[str] = []
+    if gnomad_vcf_path.exists():
+        vcf = pysam.VariantFile(str(gnomad_vcf_path))
+        gnomad_vcf_samples = set(vcf.header.samples)
+        vcf.close()
+
+        # Find overlap with ground truth
+        shared = [s for s in ground_truth.keys() if s in gnomad_vcf_samples]
+
+        # Group by superpopulation
+        superpops = ["AFR", "AMR", "EAS", "EUR", "SAS"]
+        by_superpop: dict[str, list[str]] = {sp: [] for sp in superpops}
+        for s in shared:
+            sp = sample_to_superpop.get(s, "")
+            if sp in by_superpop:
+                by_superpop[sp].append(s)
+
+        # Select ~equal from each superpopulation
+        per_pop = max(1, gnomad_samples // len(superpops))
+        remainder = gnomad_samples % len(superpops)
+
+        random.seed(42)
+        for i, sp in enumerate(superpops):
+            n = per_pop + (1 if i < remainder else 0)
+            available = by_superpop[sp]
+            if available:
+                gnomad_shared.extend(random.sample(available, min(n, len(available))))
+
+    return kg_samples, gnomad_shared
+
+
+def main() -> int:
+    """Run all benchmarks."""
+    args = parse_args()
+    base_dir = Path(__file__).parent.parent
+    total_start = time.time()
+
+    print("=" * 70)
+    print("yallHap Comprehensive Benchmark Suite")
+    print("=" * 70)
+    if args.subsample:
+        print(f"  Subsampling: {args.subsample} samples per dataset")
+    if args.threads > 1:
+        print(f"  Threads: {args.threads}")
+
+    results: list[BenchmarkResult] = []
+
+    # Find samples for benchmarks
+    print("\nFinding samples for benchmarks...")
+    kg_samples, gnomad_samples = find_shared_samples(
+        base_dir,
+        subsample=args.subsample,
+        gnomad_samples=args.gnomad_samples,
+    )
+    if kg_samples:
+        print(f"  1KG Phase 3: {len(kg_samples)} samples")
+    if gnomad_samples:
+        print(f"  gnomAD (shared with 1KG): {len(gnomad_samples)} samples, balanced by superpopulation")
+
+    # 1. 1000 Genomes Phase 3 (GRCh37)
+    print("\n[1/3] 1000 Genomes Phase 3 (GRCh37)...")
+    step_start = time.time()
+    heur_result, bayes_result = benchmark_1kg(
+        base_dir,
+        subsample=args.subsample,
+        threads=args.threads,
+        shared_samples=kg_samples if kg_samples else None,
+    )
+    step_time = time.time() - step_start
+    if heur_result:
+        results.append(heur_result)
+        print(f"  ✓ Heuristic: {heur_result.major_lineage_rate:.2f}% major lineage accuracy")
+    if bayes_result:
+        results.append(bayes_result)
+        print(f"  ✓ Bayesian: {bayes_result.major_lineage_rate:.2f}% major lineage accuracy")
+    print(f"  ⏱ Step time: {step_time:.1f}s")
+
+    # 2. AADR Ancient DNA (separate dataset, no overlap expected)
+    print("\n[2/3] AADR Ancient DNA (transversions-only)...")
+    step_start = time.time()
+    heur_result, bayes_result = benchmark_aadr(base_dir, subsample=args.subsample, threads=args.threads)
+    step_time = time.time() - step_start
+    if heur_result:
+        results.append(heur_result)
+        print(f"  ✓ Heuristic: {heur_result.major_lineage_rate:.2f}% major lineage accuracy")
+    if bayes_result:
+        results.append(bayes_result)
+        print(f"  ✓ Bayesian: {bayes_result.major_lineage_rate:.2f}% major lineage accuracy")
+    print(f"  ⏱ Step time: {step_time:.1f}s")
+
+    # 3. gnomAD High-Coverage (GRCh38) - use balanced superpopulation samples
+    print("\n[3/3] gnomAD HGDP/1000G High-Coverage (GRCh38)...")
+    step_start = time.time()
+    heur_result, bayes_result = benchmark_gnomad_highcov(
+        base_dir,
+        subsample=None,  # Don't subsample further, use gnomad_samples list
+        threads=args.threads,
+        shared_samples=gnomad_samples if gnomad_samples else None,
+    )
+    step_time = time.time() - step_start
+    if heur_result:
+        results.append(heur_result)
+        print(f"  ✓ Heuristic: {heur_result.major_lineage_rate:.2f}% major lineage accuracy")
+    if bayes_result:
+        results.append(bayes_result)
+        print(f"  ✓ Bayesian: {bayes_result.major_lineage_rate:.2f}% major lineage accuracy")
+    print(f"  ⏱ Step time: {step_time:.1f}s")
+
+
+    if not results:
+        print("\nNo benchmarks completed. Please download validation data first:")
+        print("  python scripts/download_1kg_validation.py")
+        print("  python scripts/download_ancient_test_data.py")
+        print("  python scripts/download_gnomad_highcov.py")
+        return 1
+
+    # Print and save results
+    print_results_table(results)
+    save_results(base_dir, results)
+
+    total_time = time.time() - total_start
+    print(f"\n⏱ Total benchmark time: {total_time:.1f}s ({total_time/60:.1f}m)")
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

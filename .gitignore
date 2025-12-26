@@ -144,3 +144,11 @@ yhaplo/
 
 # Temp files
 =0.4
+
+# Paper and internal files
+paper/
+output/
+ALAINA_VOICE.md
+
+# Cursor plan files
+.cursor-plans/
