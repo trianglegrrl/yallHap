@@ -1,0 +1,103 @@
+{
+  "dataset": "1000 Genomes Phase 3",
+  "total_samples": 1233,
+  "same_major_lineage": 1230,
+  "same_major_lineage_pct": 99.7566909975669,
+  "wrong_lineage": 3,
+  "exact_match": 109,
+  "more_specific": 630,
+  "less_specific": 491,
+  "mean_confidence": 0.9939845175751217,
+  "mean_derived_snps": 15.416869424168695,
+  "by_major_haplogroup": {
+    "A": {
+      "total": 5,
+      "correct": 3
+    },
+    "B": {
+      "total": 7,
+      "correct": 7
+    },
+    "C": {
+      "total": 30,
+      "correct": 30
+    },
+    "D": {
+      "total": 20,
+      "correct": 20
+    },
+    "E": {
+      "total": 322,
+      "correct": 322
+    },
+    "F": {
+      "total": 1,
+      "correct": 1
+    },
+    "G": {
+      "total": 19,
+      "correct": 19
+    },
+    "H": {
+      "total": 61,
+      "correct": 61
+    },
+    "I": {
+      "total": 48,
+      "correct": 48
+    },
+    "J": {
+      "total": 76,
+      "correct": 76
+    },
+    "L": {
+      "total": 27,
+      "correct": 27
+    },
+    "N": {
+      "total": 33,
+      "correct": 32
+    },
+    "O": {
+      "total": 203,
+      "correct": 203
+    },
+    "Q": {
+      "total": 45,
+      "correct": 45
+    },
+    "R": {
+      "total": 328,
+      "correct": 328
+    },
+    "T": {
+      "total": 8,
+      "correct": 8
+    }
+  },
+  "wrong_samples": [
+    {
+      "sample": "HG01890",
+      "expected": "A0-L1038",
+      "called": "CT",
+      "confidence": 0.5387927493071648,
+      "derived": 61
+    },
+    {
+      "sample": "HG02982",
+      "expected": "A0-V153",
+      "called": "CT",
+      "confidence": 0.5387927493071648,
+      "derived": 61
+    },
+    {
+      "sample": "HG03742",
+      "expected": "NO-M2313",
+      "called": "K-Y28301",
+      "confidence": 1.0,
+      "derived": 31
+    }
+  ],
+  "processing_time_seconds": 280.77413606643677,
+  "samples_per_second": 4.391430126983803
+}

@@ -19,10 +19,20 @@ Modern, pipeline-friendly Y-chromosome haplogroup inference.
 
 Validated against established datasets:
 
-| Dataset | Samples | Accuracy | Notes |
-|---------|---------|----------|-------|
-| 1000 Genomes Phase 3 | 1,244 males | 100% same major lineage | GRCh37, low-coverage WGS |
-| AADR Ancient DNA | 50 samples | 96% | Includes damaged aDNA |
+| Dataset | Samples | Same Major Lineage | Notes |
+|---------|---------|-------------------|-------|
+| 1000 Genomes Phase 3 | 1,233 | **99.76%** | Modern WGS, GRCh37 |
+| AADR Ancient DNA | 2,000 | **86.8%** | Transversions-only mode |
+
+**1000 Genomes details:**
+- Only 3 misclassified samples (2 rare A0 haplogroups, 1 NO/K confusion)
+- Mean confidence: 0.994
+- Mean derived SNPs: 15.4
+
+**AADR Ancient DNA details:**
+- Validated with properly formatted ground truth (X-YYYY haplogroup names)
+- Transversions-only mode for maximum damage resistance
+- Mean derived SNPs: 11.6 (low coverage typical for aDNA)
 
 See [VALIDATION_TESTING.md](VALIDATION_TESTING.md) for reproducible validation protocols.
 
