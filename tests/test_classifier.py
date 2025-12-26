@@ -251,6 +251,240 @@ Y	22739367	M269	T	C	.	PASS	.	GT	1/1	0/0	./.
             assert isinstance(r, HaplogroupCall)
 
 
+class TestParallelBatchProcessing:
+    """Tests for parallel batch processing in CLI."""
+
+    @pytest.fixture
+    def vcf_files(self, tmp_path) -> list:
+        """Create multiple VCF files for parallel processing tests."""
+        import pysam
+
+        vcf_paths = []
+
+        # VCF 1 - Sample with R-L21 markers (positions must be sorted!)
+        vcf_content_1 = """##fileformat=VCFv4.2
+##contig=<ID=Y,length=59373566>
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	SAMPLE_R1
+Y	2571333	M269	G	A	.	PASS	.	GT	1/1
+Y	2655229	L21	C	T	.	PASS	.	GT	1/1
+Y	2656183	M343	G	A	.	PASS	.	GT	1/1
+"""
+        vcf1_path = tmp_path / "sample1.vcf"
+        with open(vcf1_path, "w") as f:
+            f.write(vcf_content_1)
+        vcf1_gz = tmp_path / "sample1.vcf.gz"
+        pysam.tabix_compress(str(vcf1_path), str(vcf1_gz), force=True)
+        pysam.tabix_index(str(vcf1_gz), preset="vcf", force=True)
+        vcf_paths.append(vcf1_gz)
+
+        # VCF 2 - Different sample
+        vcf_content_2 = """##fileformat=VCFv4.2
+##contig=<ID=Y,length=59373566>
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	SAMPLE_R2
+Y	2571333	M269	G	A	.	PASS	.	GT	1/1
+Y	2655229	L21	C	T	.	PASS	.	GT	0/0
+Y	2656183	M343	G	A	.	PASS	.	GT	1/1
+"""
+        vcf2_path = tmp_path / "sample2.vcf"
+        with open(vcf2_path, "w") as f:
+            f.write(vcf_content_2)
+        vcf2_gz = tmp_path / "sample2.vcf.gz"
+        pysam.tabix_compress(str(vcf2_path), str(vcf2_gz), force=True)
+        pysam.tabix_index(str(vcf2_gz), preset="vcf", force=True)
+        vcf_paths.append(vcf2_gz)
+
+        # VCF 3 - Third sample
+        vcf_content_3 = """##fileformat=VCFv4.2
+##contig=<ID=Y,length=59373566>
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	SAMPLE_R3
+Y	2571333	M269	G	A	.	PASS	.	GT	0/0
+Y	2655229	L21	C	T	.	PASS	.	GT	1/1
+Y	2656183	M343	G	A	.	PASS	.	GT	1/1
+"""
+        vcf3_path = tmp_path / "sample3.vcf"
+        with open(vcf3_path, "w") as f:
+            f.write(vcf_content_3)
+        vcf3_gz = tmp_path / "sample3.vcf.gz"
+        pysam.tabix_compress(str(vcf3_path), str(vcf3_gz), force=True)
+        pysam.tabix_index(str(vcf3_gz), preset="vcf", force=True)
+        vcf_paths.append(vcf3_gz)
+
+        return vcf_paths
+
+    @pytest.fixture
+    def tree_json(self, tmp_path, sample_tree_dict: dict) -> str:
+        """Create tree JSON file for CLI tests."""
+        import json
+        from pathlib import Path
+
+        tree_path = tmp_path / "tree.json"
+        with open(tree_path, "w") as f:
+            json.dump(sample_tree_dict, f)
+        return str(tree_path)
+
+    def test_worker_init_and_classify(
+        self, vcf_files: list, tree_json: str, sample_snps_csv
+    ) -> None:
+        """Test worker initialization and classification functions."""
+        from pathlib import Path
+
+        from yallhap.cli import _classify_file, _init_worker
+
+        # Initialize worker
+        _init_worker(
+            Path(tree_json),
+            sample_snps_csv,
+            {"reference": "grch38"},
+        )
+
+        # Classify a file
+        result = _classify_file(vcf_files[0])
+
+        assert result is not None
+        assert result.sample == "SAMPLE_R1"
+        assert isinstance(result, HaplogroupCall)
+
+    def test_parallel_results_match_sequential(
+        self, vcf_files: list, sample_tree_dict: dict, sample_snps_csv
+    ) -> None:
+        """Test that parallel processing returns same results as sequential."""
+        from pathlib import Path
+
+        # Run sequential classification
+        tree = Tree.from_dict(sample_tree_dict)
+        snp_db = SNPDatabase.from_csv(sample_snps_csv)
+        classifier = HaplogroupClassifier(tree=tree, snp_db=snp_db, reference="grch38")
+
+        sequential_results = []
+        for vcf in vcf_files:
+            result = classifier.classify(vcf)
+            sequential_results.append(result)
+
+        # Run parallel classification using ProcessPoolExecutor
+        from concurrent.futures import ProcessPoolExecutor
+
+        from yallhap.cli import _classify_file, _init_worker
+
+        with ProcessPoolExecutor(
+            max_workers=2,
+            initializer=_init_worker,
+            initargs=(Path(sample_snps_csv).parent / "tree.json", sample_snps_csv, {"reference": "grch38"}),
+        ) as executor:
+            # Need to create tree.json first
+            import json
+
+            tree_path = Path(sample_snps_csv).parent / "tree.json"
+            with open(tree_path, "w") as f:
+                json.dump(sample_tree_dict, f)
+
+            # Now run with actual init
+            with ProcessPoolExecutor(
+                max_workers=2,
+                initializer=_init_worker,
+                initargs=(tree_path, sample_snps_csv, {"reference": "grch38"}),
+            ) as executor2:
+                parallel_results = list(executor2.map(_classify_file, vcf_files))
+
+        # Compare results - haplogroups should match
+        sequential_hgs = sorted([r.haplogroup for r in sequential_results])
+        parallel_hgs = sorted([r.haplogroup for r in parallel_results])
+        assert sequential_hgs == parallel_hgs
+
+        # Sample names should match
+        sequential_samples = sorted([r.sample for r in sequential_results])
+        parallel_samples = sorted([r.sample for r in parallel_results])
+        assert sequential_samples == parallel_samples
+
+    def test_parallel_single_file_with_multiple_threads(
+        self, vcf_files: list, tree_json: str, sample_snps_csv
+    ) -> None:
+        """Test parallel processing with more threads than files."""
+        from concurrent.futures import ProcessPoolExecutor
+        from pathlib import Path
+
+        from yallhap.cli import _classify_file, _init_worker
+
+        # Use only 1 file but request 4 threads
+        single_file = [vcf_files[0]]
+
+        with ProcessPoolExecutor(
+            max_workers=4,  # More workers than files
+            initializer=_init_worker,
+            initargs=(Path(tree_json), sample_snps_csv, {"reference": "grch38"}),
+        ) as executor:
+            results = list(executor.map(_classify_file, single_file))
+
+        assert len(results) == 1
+        assert results[0].sample == "SAMPLE_R1"
+
+    @pytest.fixture
+    def multi_sample_vcf(self, tmp_path) -> str:
+        """Create a multi-sample VCF for batch parallel tests."""
+        import pysam
+
+        vcf_content = """##fileformat=VCFv4.2
+##contig=<ID=Y,length=59373566>
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	SAMPLE_A	SAMPLE_B	SAMPLE_C	SAMPLE_D
+Y	2571333	M269	G	A	.	PASS	.	GT	1/1	1/1	0/0	1/1
+Y	2655229	L21	C	T	.	PASS	.	GT	1/1	0/0	1/1	0/0
+Y	2656183	M343	G	A	.	PASS	.	GT	1/1	1/1	1/1	0/0
+"""
+        vcf_path = tmp_path / "multi_sample.vcf"
+        with open(vcf_path, "w") as f:
+            f.write(vcf_content)
+        vcf_gz = tmp_path / "multi_sample.vcf.gz"
+        pysam.tabix_compress(str(vcf_path), str(vcf_gz), force=True)
+        pysam.tabix_index(str(vcf_gz), preset="vcf", force=True)
+        return str(vcf_gz)
+
+    def test_classify_batch_parallel_matches_sequential(
+        self, multi_sample_vcf: str, sample_tree_dict: dict, sample_snps_csv
+    ) -> None:
+        """Test that parallel batch classification matches sequential results."""
+        tree = Tree.from_dict(sample_tree_dict)
+        snp_db = SNPDatabase.from_csv(sample_snps_csv)
+        classifier = HaplogroupClassifier(tree=tree, snp_db=snp_db, reference="grch38")
+
+        samples = ["SAMPLE_A", "SAMPLE_B", "SAMPLE_C", "SAMPLE_D"]
+
+        # Run sequential (threads=1)
+        sequential_results = classifier.classify_batch(multi_sample_vcf, samples, threads=1)
+
+        # Run parallel (threads=4)
+        parallel_results = classifier.classify_batch(multi_sample_vcf, samples, threads=4)
+
+        # Results should match exactly
+        assert len(sequential_results) == len(parallel_results) == 4
+
+        for seq, par in zip(sequential_results, parallel_results):
+            assert seq.sample == par.sample
+            assert seq.haplogroup == par.haplogroup
+            assert seq.confidence == par.confidence
+            # SNP stats should also match
+            if seq.snp_stats and par.snp_stats:
+                assert seq.snp_stats.derived == par.snp_stats.derived
+                assert seq.snp_stats.ancestral == par.snp_stats.ancestral
+
+    def test_classify_batch_parallel_preserves_order(
+        self, multi_sample_vcf: str, sample_tree_dict: dict, sample_snps_csv
+    ) -> None:
+        """Test that parallel batch classification preserves sample order."""
+        tree = Tree.from_dict(sample_tree_dict)
+        snp_db = SNPDatabase.from_csv(sample_snps_csv)
+        classifier = HaplogroupClassifier(tree=tree, snp_db=snp_db, reference="grch38")
+
+        samples = ["SAMPLE_D", "SAMPLE_A", "SAMPLE_C", "SAMPLE_B"]  # Non-alphabetical order
+
+        results = classifier.classify_batch(multi_sample_vcf, samples, threads=4)
+
+        # Results should be in the same order as input samples
+        assert [r.sample for r in results] == samples
+
+
 # Integration tests would go here but require real VCF data
 class TestClassifierIntegration:
     """Integration tests for classifier (marked slow)."""

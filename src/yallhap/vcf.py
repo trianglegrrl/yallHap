@@ -57,6 +57,56 @@ class Variant:
             return False
         return all(len(a) == 1 for a in self.alt)
 
+    @property
+    def total_allelic_depth(self) -> int | None:
+        """Return total read depth from allelic depths (sum of AD field)."""
+        if self.allele_depth is None:
+            return None
+        return sum(self.allele_depth)
+
+    @property
+    def support_ratio(self) -> float | None:
+        """
+        Calculate the fraction of reads supporting the called allele.
+
+        Returns:
+            Ratio of reads supporting the called genotype (0.0-1.0),
+            or None if AD is missing, genotype is missing, or total depth is 0.
+        """
+        if self.allele_depth is None:
+            return None
+        if self.genotype is None:
+            return None
+
+        total = sum(self.allele_depth)
+        if total == 0:
+            return None
+
+        # Get depth for the called allele
+        # genotype 0 = ref (index 0), genotype 1 = first alt (index 1), etc.
+        if self.genotype < len(self.allele_depth):
+            called_depth = self.allele_depth[self.genotype]
+            return called_depth / total
+
+        return None
+
+    @property
+    def is_ambiguous(self) -> bool:
+        """
+        Check if variant call is ambiguous due to low read support.
+
+        A call is ambiguous if the support ratio is below 0.7 (70%).
+        Missing AD data is NOT considered ambiguous (we just don't know).
+
+        Returns:
+            True if support ratio is < 0.7, False otherwise
+        """
+        ratio = self.support_ratio
+        if ratio is None:
+            # Can't determine ambiguity without AD data
+            return False
+        return ratio < 0.7
+
 
 class VCFReader:
     """

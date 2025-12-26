@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import json
 import sys
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-from typing import TextIO
+from typing import Any, TextIO
 
 import click
 
@@ -17,6 +18,79 @@ from yallhap import __version__
 from yallhap.classifier import HaplogroupCall, HaplogroupClassifier
 from yallhap.snps import SNPDatabase
 from yallhap.tree import Tree
+
+# Module-level classifier for worker processes (initialized by _init_worker)
+_worker_classifier: HaplogroupClassifier | None = None
+
+
+def _load_snp_database(path: Path) -> SNPDatabase:
+    """
+    Load SNP database, auto-detecting format.
+
+    Supports:
+    - YBrowse GFF-style CSV (columns: seqid, source, type, start, ...)
+    - Simple CSV format (columns: name, aliases, grch37_pos, grch38_pos, ...)
+
+    Args:
+        path: Path to SNP database file
+
+    Returns:
+        Populated SNPDatabase instance
+    """
+    import csv
+
+    # Peek at first line to detect format
+    with open(path, newline="") as f:
+        reader = csv.reader(f)
+        header = next(reader, [])
+
+    # YBrowse GFF format has 'seqid' as first column
+    if header and header[0].strip('"') == "seqid":
+        return SNPDatabase.from_ybrowse_gff_csv(path)
+    else:
+        return SNPDatabase.from_csv(path)
+
+
+def _init_worker(
+    tree_path: Path,
+    snp_db_path: Path,
+    classifier_config: dict[str, Any],
+) -> None:
+    """
+    Initialize classifier in worker process.
+
+    Called once per worker process to load tree and SNP database,
+    avoiding repeated loading for each file.
+
+    Args:
+        tree_path: Path to YFull tree JSON file
+        snp_db_path: Path to SNP database CSV file
+        classifier_config: Configuration dict for HaplogroupClassifier
+    """
+    global _worker_classifier
+    tree = Tree.from_json(tree_path)
+    snp_db = _load_snp_database(snp_db_path)
+    _worker_classifier = HaplogroupClassifier(tree=tree, snp_db=snp_db, **classifier_config)
+
+
+def _classify_file(vcf_path: Path) -> HaplogroupCall:
+    """
+    Classify a single VCF file using the worker's classifier.
+
+    Must be called after _init_worker has initialized the classifier.
+
+    Args:
+        vcf_path: Path to VCF file
+
+    Returns:
+        HaplogroupCall with classification result
+
+    Raises:
+        RuntimeError: If worker classifier not initialized
+    """
+    if _worker_classifier is None:
+        raise RuntimeError("Worker classifier not initialized")
+    return _worker_classifier.classify(vcf_path)
 
 
 @click.group()
@@ -89,6 +163,23 @@ def main() -> None:
     help="Minimum genotype quality [default: 20]",
 )
 @click.option(
+    "--bayesian",
+    is_flag=True,
+    help="Use Bayesian posterior calculation with allelic depth (AD) support",
+)
+@click.option(
+    "--error-rate",
+    type=float,
+    default=0.001,
+    help="Sequencing error rate for Bayesian mode [default: 0.001]",
+)
+@click.option(
+    "--damage-rate",
+    type=float,
+    default=0.1,
+    help="Ancient DNA damage rate for Bayesian mode [default: 0.1]",
+)
+@click.option(
     "--output",
     "-o",
     type=click.Path(path_type=Path),
@@ -113,6 +204,9 @@ def classify(
     damage_rescale: str,
     min_depth: int,
     min_quality: int,
+    bayesian: bool,
+    error_rate: float,
+    damage_rate: float,
     output: Path | None,
     output_format: str,
 ) -> None:
@@ -126,9 +220,9 @@ def classify(
         click.echo(f"Loading tree from {tree}...", err=True)
         tree_obj = Tree.from_json(tree)
 
-        # Load SNP database
+        # Load SNP database (auto-detect format)
         click.echo(f"Loading SNP database from {snp_db}...", err=True)
-        snp_db_obj = SNPDatabase.from_csv(snp_db)
+        snp_db_obj = _load_snp_database(snp_db)
 
         # Handle T2T reference: need to liftover positions
         if reference == "t2t":
@@ -144,6 +238,9 @@ def classify(
             ancient_mode=ancient,
             transversions_only=transversions_only,
             damage_rescale=damage_rescale,  # type: ignore
+            bayesian=bayesian,
+            error_rate=error_rate,
+            damage_rate=damage_rate,
         )
 
         # Run classification
@@ -230,7 +327,7 @@ def _write_result(result: HaplogroupCall, file: TextIO, format: str) -> None:
         json.dump(result.to_dict(), file, indent=2)
         file.write("\n")
     elif format == "tsv":
-        # Header
+        # Header - include Bayesian fields if present
         header = [
             "sample",
             "haplogroup",
@@ -243,6 +340,11 @@ def _write_result(result: HaplogroupCall, file: TextIO, format: str) -> None:
             "ancestral",
             "missing",
         ]
+
+        # Add Bayesian columns if present
+        if result.posterior is not None:
+            header.extend(["posterior", "credible_set_95"])
+
         file.write("\t".join(header) + "\n")
 
         # Data
@@ -258,6 +360,14 @@ def _write_result(result: HaplogroupCall, file: TextIO, format: str) -> None:
             str(result.snp_stats.ancestral),
             str(result.snp_stats.missing),
         ]
+
+        # Add Bayesian values if present
+        if result.posterior is not None:
+            row.extend([
+                f"{result.posterior:.4f}",
+                ";".join(result.credible_set_95),
+            ])
+
         file.write("\t".join(row) + "\n")
 
 
@@ -301,6 +411,23 @@ def _write_result(result: HaplogroupCall, file: TextIO, format: str) -> None:
     help="Rescale quality scores for potentially damaged variants [default: none]",
 )
 @click.option(
+    "--bayesian",
+    is_flag=True,
+    help="Use Bayesian posterior calculation with allelic depth (AD) support",
+)
+@click.option(
+    "--error-rate",
+    type=float,
+    default=0.001,
+    help="Sequencing error rate for Bayesian mode [default: 0.001]",
+)
+@click.option(
+    "--damage-rate",
+    type=float,
+    default=0.1,
+    help="Ancient DNA damage rate for Bayesian mode [default: 0.1]",
+)
+@click.option(
     "--output",
     "-o",
     type=click.Path(path_type=Path),
@@ -321,6 +448,9 @@ def batch(
     ancient: bool,
     transversions_only: bool,
     damage_rescale: str,
+    bayesian: bool,
+    error_rate: float,
+    damage_rate: float,
     output: Path,
     threads: int,
 ) -> None:
@@ -331,41 +461,72 @@ def batch(
     """
 
     try:
-        # Load tree and SNP database
-        tree_obj = Tree.from_json(tree)
-        snp_db_obj = SNPDatabase.from_csv(snp_db)
-
-        # Handle T2T reference: need to liftover positions
-        if reference == "t2t":
-            snp_db_obj = _prepare_t2t_database(snp_db_obj)
-
-        classifier = HaplogroupClassifier(
-            tree=tree_obj,
-            snp_db=snp_db_obj,
-            reference=reference,  # type: ignore
-            ancient_mode=ancient,
-            transversions_only=transversions_only,
-            damage_rescale=damage_rescale,  # type: ignore
-        )
-
         results: list[HaplogroupCall] = []
 
         # Process files
         click.echo(f"Processing {len(vcf_files)} files...", err=True)
 
+        # Build classifier configuration dict for workers
+        classifier_config: dict[str, Any] = {
+            "reference": reference,
+            "ancient_mode": ancient,
+            "transversions_only": transversions_only,
+            "damage_rescale": damage_rescale,
+            "bayesian": bayesian,
+            "error_rate": error_rate,
+            "damage_rate": damage_rate,
+        }
+
         if threads == 1:
+            # Sequential processing - load tree/snp_db once in main process
+            tree_obj = Tree.from_json(tree)
+            snp_db_obj = SNPDatabase.from_csv(snp_db)
+
+            # Handle T2T reference: need to liftover positions
+            if reference == "t2t":
+                snp_db_obj = _prepare_t2t_database(snp_db_obj)
+                classifier_config["reference"] = "t2t"
+
+            classifier = HaplogroupClassifier(
+                tree=tree_obj,
+                snp_db=snp_db_obj,
+                **classifier_config,
+            )
+
             for vcf in vcf_files:
                 result = classifier.classify(vcf)
                 results.append(result)
                 click.echo(f"  {vcf.name}: {result.haplogroup}", err=True)
         else:
-            # Parallel processing not yet implemented
-            click.echo(
-                "Warning: Parallel processing not yet implemented, using single thread", err=True
-            )
-            for vcf in vcf_files:
-                result = classifier.classify(vcf)
-                results.append(result)
+            # Parallel processing using ProcessPoolExecutor
+            # Note: T2T liftover happens in each worker since we can't pickle the db
+            if reference == "t2t":
+                click.echo(
+                    "Warning: T2T reference with parallel processing requires liftover "
+                    "in each worker. Consider using --threads 1 for T2T.",
+                    err=True,
+                )
+
+            # Cap threads to number of files
+            actual_threads = min(threads, len(vcf_files))
+            click.echo(f"Using {actual_threads} parallel workers...", err=True)
+
+            with ProcessPoolExecutor(
+                max_workers=actual_threads,
+                initializer=_init_worker,
+                initargs=(tree, snp_db, classifier_config),
+            ) as executor:
+                # Submit all tasks
+                future_to_vcf = {
+                    executor.submit(_classify_file, vcf): vcf for vcf in vcf_files
+                }
+
+                # Collect results as they complete
+                for future in as_completed(future_to_vcf):
+                    vcf = future_to_vcf[future]
+                    result = future.result()
+                    results.append(result)
+                    click.echo(f"  {vcf.name}: {result.haplogroup}", err=True)
 
         # Write output
         with open(output, "w") as f:

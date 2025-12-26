@@ -7,6 +7,7 @@ inspired by Yleaf and pathPhynder approaches.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -75,6 +76,9 @@ class HaplogroupCall:
         snp_stats: Statistics about SNPs used
         reference: Reference genome used
         tree_version: Version of phylogenetic tree used
+        posterior: True Bayesian posterior probability (when using --bayesian)
+        credible_set_95: 95% credible set of haplogroups (when using --bayesian)
+        log_likelihood: Log-likelihood of best path (when using --bayesian)
     """
 
     sample: str
@@ -87,10 +91,13 @@ class HaplogroupCall:
     snp_stats: SNPStats = field(default_factory=SNPStats)
     reference: str = ""
     tree_version: str = ""
+    posterior: float | None = None
+    credible_set_95: list[str] = field(default_factory=list)
+    log_likelihood: float | None = None
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON output."""
-        return {
+        result = {
             "sample": self.sample,
             "haplogroup": self.haplogroup,
             "confidence": self.confidence,
@@ -116,13 +123,24 @@ class HaplogroupCall:
             ],
         }
 
+        # Add Bayesian fields if present
+        if self.posterior is not None:
+            result["posterior"] = self.posterior
+        if self.credible_set_95:
+            result["credible_set_95"] = self.credible_set_95
+        if self.log_likelihood is not None:
+            result["log_likelihood"] = self.log_likelihood
+
+        return result
+
 
 class HaplogroupClassifier:
     """
     Classifier for Y-chromosome haplogroups.
 
     Uses a likelihood-based approach with tree traversal to find
-    the most probable haplogroup assignment.
+    the most probable haplogroup assignment. Optionally uses full
+    Bayesian inference with allelic depth support.
     """
 
     def __init__(
@@ -135,6 +153,9 @@ class HaplogroupClassifier:
         ancient_mode: bool = False,
         transversions_only: bool = False,
         damage_rescale: DamageRescaleMode = "none",
+        bayesian: bool = False,
+        error_rate: float = 0.001,
+        damage_rate: float = 0.1,
     ):
         """
         Initialize classifier.
@@ -148,6 +169,9 @@ class HaplogroupClassifier:
             ancient_mode: Enable ancient DNA damage filtering (C>T, G>A)
             transversions_only: Only use transversions (strictest ancient mode)
             damage_rescale: Quality score rescaling for potentially damaged variants
+            bayesian: Use Bayesian posterior calculation with AD support
+            error_rate: Sequencing error rate for Bayesian mode
+            damage_rate: Ancient DNA damage rate for Bayesian mode
         """
         self.tree = tree
         self.snp_db = snp_db
@@ -157,9 +181,25 @@ class HaplogroupClassifier:
         self.ancient_mode = ancient_mode
         self.transversions_only = transversions_only
         self.damage_rescale = damage_rescale
+        self.bayesian = bayesian
+        self.error_rate = error_rate
+        self.damage_rate = damage_rate
 
         # Build position -> haplogroup mapping
         self._build_position_index()
+
+        # Initialize Bayesian classifier if enabled
+        self._bayesian_classifier = None
+        if self.bayesian:
+            from yallhap.bayesian import BayesianClassifier
+
+            self._bayesian_classifier = BayesianClassifier(
+                tree=tree,
+                snp_db=snp_db,
+                error_rate=error_rate,
+                damage_rate=damage_rate,
+                reference=reference,
+            )
 
     def _build_position_index(self) -> None:
         """
@@ -167,52 +207,67 @@ class HaplogroupClassifier:
 
         Creates:
         - _snp_name_to_pos: Maps SNP name → position
-        - _pos_to_snp: Maps position → SNP object
-        - _node_to_positions: Maps tree node name → list of positions for its SNPs
+        - _snp_name_to_snp: Maps SNP name → SNP object (for correct allele lookup)
+        - _node_to_snp_info: Maps tree node → list of (position, snp_name) tuples
         """
         self._snp_name_to_pos: dict[str, int] = {}
-        self._pos_to_snp: dict[int, SNP] = {}
+        self._snp_name_to_snp: dict[str, SNP] = {}
+        self._node_to_snp_info: dict[str, list[tuple[int, str]]] = {}
+        # Keep _node_to_positions for backwards compatibility
         self._node_to_positions: dict[str, list[int]] = {}
+        # Keep _pos_to_snp for backwards compatibility (used by Bayesian classifier)
+        self._pos_to_snp: dict[int, SNP] = {}
 
-        # Build SNP name → position index from SNP database
+        # Build SNP name → position and SNP name → SNP indices
         for snp in self.snp_db:
             pos = snp.get_position(self.reference)
             if pos is not None:
                 # Index by primary name and aliases
                 self._snp_name_to_pos[snp.name] = pos
-                self._pos_to_snp[pos] = snp
+                self._snp_name_to_snp[snp.name] = snp
+                self._pos_to_snp[pos] = snp  # May overwrite, but kept for compat
                 for alias in snp.aliases:
                     self._snp_name_to_pos[alias] = pos
+                    self._snp_name_to_snp[alias] = snp
 
-        # Build node → positions index from tree
+        # Build node → (position, snp_name) index from tree
         for node in self.tree.iter_depth_first():
+            snp_info: list[tuple[int, str]] = []
             positions: list[int] = []
             for snp_group in node.snps:
                 # SNPs in tree can be comma-separated
                 for snp_name in snp_group.split(","):
                     snp_name = snp_name.strip()
                     if snp_name and snp_name in self._snp_name_to_pos:
-                        positions.append(self._snp_name_to_pos[snp_name])
-            if positions:
+                        pos = self._snp_name_to_pos[snp_name]
+                        snp_info.append((pos, snp_name))
+                        positions.append(pos)
+            if snp_info:
+                self._node_to_snp_info[node.name] = snp_info
                 self._node_to_positions[node.name] = positions
 
     def classify_batch(
         self,
         vcf_path: Path | str,
         samples: list[str],
+        threads: int = 1,
+        progress_callback: Callable[[], None] | None = None,
     ) -> list[HaplogroupCall]:
         """
         Classify multiple samples from a single VCF file.
 
         Opens the VCF once and reads all samples in a single pass,
-        which is much faster for multi-sample VCFs.
+        which is much faster for multi-sample VCFs. Classification
+        of individual samples can be parallelized with threads > 1.
 
         Args:
             vcf_path: Path to VCF file
             samples: List of sample names to classify
+            threads: Number of parallel threads for classification (default: 1)
+            progress_callback: Optional callback invoked after each sample is classified
 
         Returns:
-            List of HaplogroupCall results, one per sample
+            List of HaplogroupCall results, one per sample (in input order)
         """
         import pysam
 
@@ -270,9 +325,8 @@ class HaplogroupClassifier:
 
         vcf.close()
 
-        # Now classify each sample
-        results = []
-        for sample_name in samples:
+        # Helper to classify a single sample
+        def classify_one(sample_name: str) -> HaplogroupCall:
             variants = sample_variants[sample_name]
             haplogroup_scores = self._score_haplogroups(variants)
             best_hg, confidence, qc_scores, stats = self._find_best_haplogroup(
@@ -285,20 +339,39 @@ class HaplogroupClassifier:
                 defining_snps = self.tree.get(best_hg).snps
             alternatives = self._get_alternatives(haplogroup_scores, best_hg)
 
-            results.append(
-                HaplogroupCall(
-                    sample=sample_name,
-                    haplogroup=best_hg,
-                    confidence=confidence,
-                    qc_scores=qc_scores,
-                    path=path,
-                    defining_snps=defining_snps,
-                    alternatives=alternatives,
-                    snp_stats=stats,
-                    reference=self.reference,
-                    tree_version="YFull",
-                )
+            return HaplogroupCall(
+                sample=sample_name,
+                haplogroup=best_hg,
+                confidence=confidence,
+                qc_scores=qc_scores,
+                path=path,
+                defining_snps=defining_snps,
+                alternatives=alternatives,
+                snp_stats=stats,
+                reference=self.reference,
+                tree_version="YFull",
             )
+
+        # Classify samples (parallel if threads > 1)
+        if threads > 1:
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+
+            results_dict: dict[str, HaplogroupCall] = {}
+            with ThreadPoolExecutor(max_workers=threads) as executor:
+                futures = {executor.submit(classify_one, s): s for s in samples}
+                for future in as_completed(futures):
+                    sample_name = futures[future]
+                    results_dict[sample_name] = future.result()
+                    if progress_callback:
+                        progress_callback()
+            # Return in original order
+            results = [results_dict[s] for s in samples]
+        else:
+            results = []
+            for s in samples:
+                results.append(classify_one(s))
+                if progress_callback:
+                    progress_callback()
 
         return results
 
@@ -325,6 +398,11 @@ class HaplogroupClassifier:
         with VCFReader(vcf_path, sample) as reader:
             actual_sample = reader.sample
 
+        # Use Bayesian classifier if enabled
+        if self.bayesian and self._bayesian_classifier is not None:
+            return self._classify_bayesian(variants, actual_sample)
+
+        # Otherwise use heuristic scoring
         # Score haplogroups
         haplogroup_scores = self._score_haplogroups(variants)
 
@@ -357,6 +435,111 @@ class HaplogroupClassifier:
             tree_version="YFull",  # TODO: get actual version
         )
 
+    def _classify_bayesian(
+        self,
+        variants: dict[int, Variant],
+        sample_name: str,
+    ) -> HaplogroupCall:
+        """
+        Classify using Bayesian posterior calculation.
+
+        Uses the BayesianClassifier to compute true posteriors with
+        allelic depth support.
+
+        Args:
+            variants: Dict of position -> Variant
+            sample_name: Sample identifier
+
+        Returns:
+            HaplogroupCall with Bayesian posteriors
+        """
+        if self._bayesian_classifier is None:
+            raise RuntimeError("Bayesian classifier not initialized")
+
+        # Compute posteriors
+        posteriors = self._bayesian_classifier.compute_posteriors(
+            variants, is_ancient=self.ancient_mode
+        )
+
+        if not posteriors:
+            return HaplogroupCall(
+                sample=sample_name,
+                haplogroup="NA",
+                confidence=0.0,
+                reference=self.reference,
+                tree_version="YFull",
+            )
+
+        # Get best haplogroup and credible set
+        best_hg, best_prob = posteriors[0]
+        credible_set = self._bayesian_classifier.get_credible_set(
+            posteriors, threshold=0.95
+        )
+
+        # Build path
+        path = self.tree.path_from_root(best_hg) if best_hg in self.tree else []
+
+        # Get defining SNPs
+        defining_snps: list[str] = []
+        if best_hg in self.tree:
+            defining_snps = self.tree.get(best_hg).snps
+
+        # Get alternatives (top 5)
+        alternatives = posteriors[1:6]
+
+        # Calculate SNP stats from variants
+        derived_count = 0
+        ancestral_count = 0
+        missing_count = 0
+
+        for snp in self.snp_db:
+            pos = snp.get_position(self.reference)
+            if pos is None:
+                continue
+
+            if pos in variants:
+                variant = variants[pos]
+                called = variant.called_allele
+                if called == snp.derived:
+                    derived_count += 1
+                elif called == snp.ancestral:
+                    ancestral_count += 1
+                else:
+                    missing_count += 1
+            else:
+                missing_count += 1
+
+        stats = SNPStats(
+            informative_tested=derived_count + ancestral_count + missing_count,
+            derived=derived_count,
+            ancestral=ancestral_count,
+            missing=missing_count,
+        )
+
+        # QC scores from Bayesian perspective
+        qc_scores = QCScores(
+            qc1_backbone=best_prob,  # Use posterior as backbone score
+            qc2_terminal=best_prob,  # Use posterior as terminal score
+            qc3_path=best_prob,  # Use posterior as path score
+            qc4_posterior=best_prob,
+        )
+
+        return HaplogroupCall(
+            sample=sample_name,
+            haplogroup=best_hg,
+            confidence=best_prob,
+            qc_scores=qc_scores,
+            path=path,
+            defining_snps=defining_snps,
+            alternatives=alternatives,
+            snp_stats=stats,
+            reference=self.reference,
+            tree_version="YFull",
+            posterior=best_prob,
+            credible_set_95=credible_set,
+            log_likelihood=None,  # Could add if needed
+        )
+
     def _read_variants(
         self, vcf_path: Path | str, sample: str | None
     ) -> dict[int, Variant]:
@@ -383,8 +566,9 @@ class HaplogroupClassifier:
         """
         Score each haplogroup based on observed variants.
 
-        Uses the tree structure to map nodes to their defining SNP positions,
+        Uses the tree structure to map nodes to their defining SNPs,
         then checks whether variants show derived or ancestral alleles.
+        Looks up SNPs by name to handle multiple SNPs at the same position.
 
         Returns dict of {haplogroup: {"derived": n, "ancestral": n, "missing": n}}
         """
@@ -393,12 +577,13 @@ class HaplogroupClassifier:
         scores: dict[str, dict[str, int]] = {}
 
         # Score each tree node based on its defining SNPs
-        for node_name, positions in self._node_to_positions.items():
+        for node_name, snp_info_list in self._node_to_snp_info.items():
             if node_name not in scores:
                 scores[node_name] = {"derived": 0, "ancestral": 0, "missing": 0}
 
-            for pos in positions:
-                snp = self._pos_to_snp.get(pos)
+            for pos, snp_name in snp_info_list:
+                # Look up SNP by name to get correct ancestral/derived alleles
+                snp = self._snp_name_to_snp.get(snp_name)
                 if snp is None:
                     continue
 
@@ -672,6 +857,9 @@ def classify(
     ancient: bool = False,
     min_depth: int = 10,
     min_quality: int = 20,
+    bayesian: bool = False,
+    error_rate: float = 0.001,
+    damage_rate: float = 0.1,
 ) -> HaplogroupCall:
     """
     Convenience function for haplogroup classification.
@@ -685,6 +873,9 @@ def classify(
         ancient: Enable ancient DNA mode
         min_depth: Minimum read depth
         min_quality: Minimum genotype quality
+        bayesian: Use Bayesian posterior calculation with AD support
+        error_rate: Sequencing error rate for Bayesian mode
+        damage_rate: Ancient DNA damage rate for Bayesian mode
 
     Returns:
         HaplogroupCall with classification result
@@ -701,6 +892,9 @@ def classify(
         min_depth=min_depth,
         min_quality=min_quality,
         ancient_mode=ancient,
+        bayesian=bayesian,
+        error_rate=error_rate,
+        damage_rate=damage_rate,
     )
 
     return classifier.classify(vcf_path, sample)
