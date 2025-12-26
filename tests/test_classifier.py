@@ -1,17 +1,17 @@
 """
-Unit tests for yclade.classifier module.
+Unit tests for yallhap.classifier module.
 """
 
 import pytest
 
-from yclade.classifier import (
+from yallhap.classifier import (
     HaplogroupCall,
     HaplogroupClassifier,
     QCScores,
     SNPStats,
 )
-from yclade.snps import SNPDatabase
-from yclade.tree import Tree
+from yallhap.snps import SNPDatabase
+from yallhap.tree import Tree
 
 
 class TestQCScores:
@@ -142,24 +142,113 @@ class TestClassifierDamageFiltering:
 
     def test_damage_like_c_to_t(self, classifier_ancient: HaplogroupClassifier) -> None:
         """Test C>T is flagged as damage-like."""
-        from yclade.snps import SNP
+        from yallhap.snps import SNP
 
         snp = SNP(name="TEST", ancestral="C", derived="T")
         assert classifier_ancient._is_damage_like(snp, "T")
 
     def test_damage_like_g_to_a(self, classifier_ancient: HaplogroupClassifier) -> None:
         """Test G>A is flagged as damage-like."""
-        from yclade.snps import SNP
+        from yallhap.snps import SNP
 
         snp = SNP(name="TEST", ancestral="G", derived="A")
         assert classifier_ancient._is_damage_like(snp, "A")
 
     def test_not_damage_like_transversion(self, classifier_ancient: HaplogroupClassifier) -> None:
         """Test transversions are not flagged as damage."""
-        from yclade.snps import SNP
+        from yallhap.snps import SNP
 
         snp = SNP(name="TEST", ancestral="C", derived="A")
         assert not classifier_ancient._is_damage_like(snp, "A")
+
+
+class TestClassifyBatch:
+    """Tests for batch classification functionality."""
+
+    @pytest.fixture
+    def multi_sample_vcf(self, tmp_path) -> str:
+        """Create a minimal multi-sample VCF for testing."""
+        import pysam
+
+        # Write uncompressed VCF first
+        vcf_content = """##fileformat=VCFv4.2
+##contig=<ID=Y,length=59373566>
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	SAMPLE1	SAMPLE2	SAMPLE3
+Y	2887824	M343	C	A	.	PASS	.	GT	1/1	0/0	1/1
+Y	15654428	L21	C	G	.	PASS	.	GT	1/1	0/0	0/0
+Y	22739367	M269	T	C	.	PASS	.	GT	1/1	0/0	./.
+"""
+        vcf_path = tmp_path / "test.vcf"
+        with open(vcf_path, "w") as f:
+            f.write(vcf_content)
+
+        # Compress with bgzip and index
+        vcf_gz = tmp_path / "test.vcf.gz"
+        pysam.tabix_compress(str(vcf_path), str(vcf_gz), force=True)
+        pysam.tabix_index(str(vcf_gz), preset="vcf", force=True)
+
+        return str(vcf_gz)
+
+    @pytest.fixture
+    def batch_classifier(self, sample_tree_dict: dict, sample_snps_csv) -> HaplogroupClassifier:
+        """Create classifier for batch tests."""
+        tree = Tree.from_dict(sample_tree_dict)
+        snp_db = SNPDatabase.from_csv(sample_snps_csv)
+        return HaplogroupClassifier(tree=tree, snp_db=snp_db, reference="grch38")
+
+    def test_classify_batch_returns_list(
+        self, batch_classifier: HaplogroupClassifier, multi_sample_vcf: str
+    ) -> None:
+        """Test batch classification returns list of results."""
+        samples = ["SAMPLE1", "SAMPLE2"]
+        results = batch_classifier.classify_batch(multi_sample_vcf, samples)
+
+        assert isinstance(results, list)
+        assert len(results) == 2
+
+    def test_classify_batch_result_samples_match(
+        self, batch_classifier: HaplogroupClassifier, multi_sample_vcf: str
+    ) -> None:
+        """Test batch results have correct sample names."""
+        samples = ["SAMPLE1", "SAMPLE2", "SAMPLE3"]
+        results = batch_classifier.classify_batch(multi_sample_vcf, samples)
+
+        assert results[0].sample == "SAMPLE1"
+        assert results[1].sample == "SAMPLE2"
+        assert results[2].sample == "SAMPLE3"
+
+    def test_classify_batch_invalid_sample_raises(
+        self, batch_classifier: HaplogroupClassifier, multi_sample_vcf: str
+    ) -> None:
+        """Test batch with invalid sample name raises ValueError."""
+        with pytest.raises(ValueError, match="Sample INVALID not found"):
+            batch_classifier.classify_batch(multi_sample_vcf, ["INVALID"])
+
+    def test_classify_batch_empty_samples(
+        self, batch_classifier: HaplogroupClassifier, multi_sample_vcf: str
+    ) -> None:
+        """Test batch with empty sample list returns empty list."""
+        results = batch_classifier.classify_batch(multi_sample_vcf, [])
+        assert results == []
+
+    def test_classify_batch_with_ancient_mode(
+        self, sample_tree_dict: dict, sample_snps_csv, multi_sample_vcf: str
+    ) -> None:
+        """Test batch classification with transversions-only mode."""
+        tree = Tree.from_dict(sample_tree_dict)
+        snp_db = SNPDatabase.from_csv(sample_snps_csv)
+        classifier = HaplogroupClassifier(
+            tree=tree, snp_db=snp_db, reference="grch38", transversions_only=True
+        )
+
+        samples = ["SAMPLE1", "SAMPLE2"]
+        results = classifier.classify_batch(multi_sample_vcf, samples)
+
+        assert len(results) == 2
+        # Results should have fewer derived SNPs due to transition filtering
+        for r in results:
+            assert isinstance(r, HaplogroupCall)
 
 
 # Integration tests would go here but require real VCF data

@@ -1,5 +1,5 @@
 """
-Unit tests for yclade.tree module.
+Unit tests for yallhap.tree module.
 """
 
 import json
@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from yclade.tree import Node, Tree
+from yallhap.tree import Node, Tree
 
 
 class TestNode:

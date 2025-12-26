@@ -3,13 +3,13 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "yclade"
+name = "yallhap"
 version = "0.1.0"
 description = "Modern, pipeline-friendly Y-chromosome haplogroup inference"
 readme = "README.md"
 license = {text = "MIT"}
 authors = [
-    {name = "YClade Contributors"}
+    {name = "yallHap Contributors"}
 ]
 requires-python = ">=3.10"
 classifiers = [
@@ -33,6 +33,7 @@ dependencies = [
     "numpy>=1.24.0",
     "click>=8.0.0",
     "requests>=2.28.0",
+    "pyliftover>=0.4",
 ]
 
 [project.optional-dependencies]
@@ -48,13 +49,14 @@ dev = [
 ]
 
 [project.scripts]
-yclade = "yclade.cli:main"
+yallhap = "yallhap.cli:main"
+yallHap = "yallhap.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/yourusername/yclade"
-Documentation = "https://github.com/yourusername/yclade#readme"
-Repository = "https://github.com/yourusername/yclade"
-Issues = "https://github.com/yourusername/yclade/issues"
+Homepage = "https://github.com/yourusername/yallhap"
+Documentation = "https://github.com/yourusername/yallhap#readme"
+Repository = "https://github.com/yourusername/yallhap"
+Issues = "https://github.com/yourusername/yallhap/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -92,7 +94,7 @@ ignore = [
 ]
 
 [tool.ruff.isort]
-known-first-party = ["yclade"]
+known-first-party = ["yallhap"]
 
 [tool.mypy]
 python_version = "3.10"
@@ -119,7 +121,7 @@ markers = [
 ]
 
 [tool.coverage.run]
-source = ["src/yclade"]
+source = ["src/yallhap"]
 branch = true
 omit = ["*/tests/*"]
 

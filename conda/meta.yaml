@@ -1,4 +1,4 @@
-{% set name = "yclade" %}
+{% set name = "yallhap" %}
 {% set version = "0.1.0" %}
 
 package:
@@ -9,7 +9,7 @@ source:
   # For GitHub release:
   # url: https://github.com/yourusername/{{ name }}/archive/v{{ version }}.tar.gz
   # sha256: <SHA256_HASH>
-  
+
   # For local development:
   path: ..
 
@@ -18,7 +18,8 @@ build:
   noarch: python
   script: {{ PYTHON }} -m pip install . -vv
   entry_points:
-    - yclade = yclade.cli:main
+    - yallhap = yallhap.cli:main
+    - yallHap = yallhap.cli:main
 
 requirements:
   host:
@@ -35,27 +36,29 @@ requirements:
 
 test:
   imports:
-    - yclade
-    - yclade.tree
-    - yclade.snps
-    - yclade.classifier
+    - yallhap
+    - yallhap.tree
+    - yallhap.snps
+    - yallhap.classifier
   commands:
-    - yclade --help
-    - yclade --version
+    - yallhap --help
+    - yallhap --version
+    - yallHap --help
+    - yallHap --version
 
 about:
-  home: https://github.com/yourusername/yclade
+  home: https://github.com/yourusername/yallhap
   license: MIT
   license_family: MIT
   license_file: LICENSE
   summary: Modern Y-chromosome haplogroup inference
   description: |
-    YClade is a pipeline-friendly tool for Y-chromosome haplogroup 
-    classification supporting modern and ancient DNA with probabilistic 
-    confidence scoring. It uses the YFull phylogenetic tree and supports 
+    yallHap is a pipeline-friendly tool for Y-chromosome haplogroup
+    classification supporting modern and ancient DNA with probabilistic
+    confidence scoring. It uses the YFull phylogenetic tree and supports
     multiple reference genomes including T2T-CHM13v2.0.
-  doc_url: https://github.com/yourusername/yclade#readme
-  dev_url: https://github.com/yourusername/yclade
+  doc_url: https://github.com/yourusername/yallhap#readme
+  dev_url: https://github.com/yourusername/yallhap
 
 extra:
   recipe-maintainers:

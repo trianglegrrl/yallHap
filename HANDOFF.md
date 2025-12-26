@@ -1,10 +1,10 @@
-# YClade: Modern Y-Chromosome Haplogroup Caller
+# yallHap: Modern Y-Chromosome Haplogroup Caller
 
 ## Handoff Document for Claude Code Agent
 
-**Project Name:** yclade  
-**Purpose:** A modern, pipeline-friendly Y-chromosome haplogroup inference tool  
-**Target Users:** Population geneticists, forensic geneticists, paleogenomicists  
+**Project Name:** yallhap
+**Purpose:** A modern, pipeline-friendly Y-chromosome haplogroup inference tool
+**Target Users:** Population geneticists, forensic geneticists, paleogenomicists
 **License:** MIT (or GPL-3.0 for compatibility with dependent tools)
 
 ---
@@ -39,9 +39,9 @@ Build a state-of-the-art Y-chromosome haplogroup caller that:
 
 ### Language Choice: Python with Rust Extensions
 
-**Primary:** Python 3.10+  
-**Hot paths:** Rust via PyO3 (optional optimization later)  
-**Rationale:** 
+**Primary:** Python 3.10+
+**Hot paths:** Rust via PyO3 (optional optimization later)
+**Rationale:**
 - Python for rapid development and bioinformatics ecosystem (pysam, pandas)
 - Rust extensions can be added later for performance-critical tree traversal
 - Bioconda/Docker compatibility is straightforward
@@ -53,7 +53,7 @@ Implement a **likelihood-based approach** inspired by pathPhynder:
 ```
 For each tree branch b:
     L(b) = P(observed variants | sample descended from b)
-    
+
     For each informative SNP at position p:
         If derived allele observed:
             L(b) *= P(derived | descended from b)
@@ -152,9 +152,9 @@ SAMPLE1	R-L21	0.97	0.98	1.0	0.95	0.97	145	1089	13
 
 ### YFull Tree (PRIMARY)
 
-**Source:** https://github.com/YFullTeam/YTree  
-**File:** `current_tree.json`  
-**Update frequency:** Monthly  
+**Source:** https://github.com/YFullTeam/YTree
+**File:** `current_tree.json`
+**Update frequency:** Monthly
 **Format:** JSON with nested structure
 
 ```json
@@ -171,7 +171,7 @@ SAMPLE1	R-L21	0.97	0.98	1.0	0.95	0.97	145	1089	13
 
 ### YBrowse SNP Database
 
-**Source:** http://ybrowse.org/gbrowse2/gff/  
+**Source:** http://ybrowse.org/gbrowse2/gff/
 **Files:**
 - `snps_hg38.vcf.gz` - VCF format positions
 - `snps_hg38.csv` - CSV with all metadata
@@ -187,7 +187,7 @@ SAMPLE1	R-L21	0.97	0.98	1.0	0.95	0.97	145	1089	13
 
 ### Validation Data
 
-**1000 Genomes Phase 3:** 1,233 males with published haplogroups (Poznik et al. 2016)  
+**1000 Genomes Phase 3:** 1,233 males with published haplogroups (Poznik et al. 2016)
 **Download:** ftp://ftp.1000genomes.ebi.ac.uk/vol1/ftp/release/20130502/
 
 ---
@@ -437,7 +437,7 @@ dev = [
 
 ```bash
 # Clone and setup
-cd yclade
+cd yallhap
 python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
@@ -452,7 +452,7 @@ python scripts/download_yfull_tree.py
 python scripts/download_test_data.py
 
 # Run classification
-yclade classify sample.vcf.gz --reference grch38 --output result.json
+yallhap classify sample.vcf.gz --reference grch38 --output result.json
 ```
 
 ---
@@ -460,13 +460,13 @@ yclade classify sample.vcf.gz --reference grch38 --output result.json
 ## 13. File Structure
 
 ```
-yclade/
+yallhap/
 ├── HANDOFF.md              # This document
 ├── README.md               # User-facing documentation
 ├── RESEARCH.md             # Background research (from Overview)
 ├── pyproject.toml          # Project configuration
 ├── src/
-│   └── yclade/
+│   └── yallhap/
 │       ├── __init__.py
 │       ├── cli.py          # Click-based CLI
 │       ├── tree.py         # YFull tree parser
@@ -522,5 +522,5 @@ Start with TDD: write the test, then implement the code.
 
 **End of Handoff Document**
 
-*Generated: December 2024*  
+*Generated: December 2025*
 *For questions: Review RESEARCH.md for detailed background*
