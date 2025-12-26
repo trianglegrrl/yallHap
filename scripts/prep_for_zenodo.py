@@ -52,6 +52,12 @@ VALIDATION_FILES = [
     "liftover/hg19-chm13v2.chain",
 ]
 
+# Results files to include (relative to project root)
+RESULTS_FILES = [
+    "validation_1kg_full.json",
+    "validation_aadr_2000_filtered.json",
+]
+
 
 def get_file_size_mb(path: Path) -> float:
     """Get file size in megabytes."""
@@ -84,12 +90,23 @@ def main() -> int:
     print()
 
     # Check all required files exist
-    print("Checking required files...")
+    print("Checking validation data files...")
     missing_files = []
     total_size = 0.0
 
     for rel_path in VALIDATION_FILES:
         full_path = data_dir / rel_path
+        if full_path.exists():
+            size_mb = get_file_size_mb(full_path)
+            total_size += size_mb
+            print(f"  ✓ {rel_path} ({size_mb:.1f} MB)")
+        else:
+            missing_files.append(rel_path)
+            print(f"  ✗ {rel_path} (MISSING)")
+
+    print("\nChecking validation results files...")
+    for rel_path in RESULTS_FILES:
+        full_path = project_root / rel_path
         if full_path.exists():
             size_mb = get_file_size_mb(full_path)
             total_size += size_mb
@@ -121,12 +138,20 @@ def main() -> int:
     print(f"Creating {tarball_path.name}...")
 
     with tarfile.open(tarball_path, "w:gz") as tar:
+        # Add validation data files
         for rel_path in VALIDATION_FILES:
             full_path = data_dir / rel_path
             # Archive with path relative to data/ so it extracts correctly
             arcname = rel_path
             tar.add(full_path, arcname=arcname)
             print(f"  Added: {rel_path}")
+
+        # Add validation results files
+        for rel_path in RESULTS_FILES:
+            full_path = project_root / rel_path
+            arcname = f"results/{rel_path}"
+            tar.add(full_path, arcname=arcname)
+            print(f"  Added: results/{rel_path}")
 
     tarball_size = get_file_size_mb(tarball_path)
     print()

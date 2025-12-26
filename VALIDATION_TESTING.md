@@ -6,10 +6,12 @@ This document describes how to reproduce yallHap's validation results and run va
 
 yallHap is validated against two primary datasets:
 
-| Dataset | Samples | Reference | Type | Accuracy |
-|---------|---------|-----------|------|----------|
-| 1000 Genomes Phase 3 | 1,244 males | GRCh37 | Modern WGS | 100% same major lineage |
-| AADR v54 | 50 samples | GRCh37 | Ancient DNA | 96% |
+| Dataset | Samples | Reference | Type | Same Major Lineage |
+|---------|---------|-----------|------|-------------------|
+| 1000 Genomes Phase 3 | 1,233 males | GRCh37 | Modern WGS | **99.76%** |
+| AADR v54 | 2,000 | GRCh37 | Ancient DNA | **86.8%** |
+
+Note: AADR accuracy is measured on samples with properly formatted ground truth (X-YYYY haplogroup names). The raw AADR annotation includes SNP-only names (e.g., "M458" instead of "R-M458") which cannot be directly compared.
 
 ## Quick Start
 
@@ -87,22 +89,24 @@ python scripts/validate_1kg.py
 **Expected output:**
 
 ```
-Loading tree from data/yfull_tree.json...
-Loading SNP database from data/validation/ybrowse_snps_hg19.csv...
-Loading ground truth from data/validation/poznik2016_haplogroups.tsv...
-Classifying 1244 samples from data/validation/1kg_chrY_phase3.vcf.gz...
+Classifying 1233 samples...
 
 Results:
-  Same major lineage: 1244/1244 (100.0%)
-  Exact match: 174/1244 (14.0%)
-  More specific call: 892/1244 (71.7%)
-  Less specific call: 178/1244 (14.3%)
+  Same major lineage: 1230/1233 (99.76%)
+  Wrong lineage: 3/1233 (0.24%)
+  Exact match: 109/1230 (8.86%)
+  More specific call: 630/1230 (51.22%)
+  Less specific call: 491/1230 (39.92%)
+
+Mean confidence: 0.994
+Mean derived SNPs: 15.4
 
 Notes:
 - "Exact match" requires identical haplogroup names
 - Low exact match rate is expected due to different tree versions
   (yallHap uses YFull 2024, ground truth uses ISOGG 2016)
 - "Same major lineage" means the first letter matches (R, J, I, etc.)
+- 3 wrong samples: 2 rare A0 haplogroups, 1 NO/K confusion
 ```
 
 #### Quick Validation (100 samples)
@@ -140,53 +144,63 @@ EOF
 
 This validates yallHap against ancient samples from the Allen Ancient DNA Resource (AADR).
 
+**Important:** AADR ground truth uses mixed nomenclature - some samples have proper haplogroup names (e.g., "R-L21") while others have SNP-only names (e.g., "M458"). For accurate validation, filter to samples with proper X-YYYY format.
+
 ```bash
 python scripts/validate_ancient.py
 ```
 
 Or manually:
 
-```bash
-python << 'EOF'
+```python
 from yallhap.classifier import HaplogroupClassifier
 from yallhap.snps import SNPDatabase
 from yallhap.tree import Tree
 import csv
+import random
 
 tree = Tree.from_json('data/yfull_tree.json')
 db = SNPDatabase.from_ybrowse_gff_csv('data/validation/ybrowse_snps_hg19.csv')
 
-# Ancient DNA mode with transversions-only
+# Ancient DNA mode with transversions-only (strictest)
 c = HaplogroupClassifier(
     tree=tree,
     snp_db=db,
     reference='grch37',
-    ancient_mode=True,
     transversions_only=True,
 )
 
-# Load ground truth
+# Load ground truth - filter to proper haplogroup format only
 gt = {}
 with open('data/ancient/aadr_1240k_ground_truth.tsv') as f:
     for row in csv.DictReader(f, delimiter='\t'):
-        gt[row['sample_id']] = row['haplogroup']
+        hg = row['haplogroup_terminal']
+        # Only keep proper haplogroup names (X-YYYY format)
+        if hg and '-' in hg and hg[0].isalpha():
+            gt[row['sample_id']] = hg
 
-# Classify 50 samples
-samples = list(gt.keys())[:50]
+# Get samples present in VCF
+import pysam
+vcf = pysam.VariantFile('data/ancient/aadr_chrY_v2.vcf.gz')
+vcf_samples = set(vcf.header.samples)
+vcf.close()
+
+valid_samples = [s for s in gt.keys() if s in vcf_samples]
+random.seed(42)
+samples = random.sample(valid_samples, min(2000, len(valid_samples)))
+
+# Classify
 results = c.classify_batch('data/ancient/aadr_chrY_v2.vcf.gz', samples)
 
 # Check accuracy
-correct = 0
-for i, sample in enumerate(samples):
-    expected = gt[sample]
-    called = results[i].haplogroup
-    # Check if same lineage (called is ancestor or descendant of expected)
-    if expected[0] == called[0]:  # Same major lineage
-        correct += 1
-
-print(f"Accuracy: {correct}/50 ({correct*2}%) same major lineage")
-EOF
+correct = sum(1 for i, s in enumerate(samples) 
+              if gt[s][0] == results[i].haplogroup[0])
+print(f"Accuracy: {correct}/{len(samples)} ({100*correct/len(samples):.1f}%)")
 ```
+
+**Expected results:**
+- Same major lineage: ~86.8% (2,000 samples)
+- Mean derived SNPs: ~11.6 (low coverage typical for aDNA)
 
 ## Understanding Results
 

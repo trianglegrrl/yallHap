@@ -1,0 +1,400 @@
+{
+  "dataset": "AADR Ancient DNA (filtered ground truth)",
+  "mode": "transversions_only",
+  "ground_truth_filter": "X-YYYY format only (excludes SNP-only names)",
+  "total_samples": 2000,
+  "same_major_lineage": 1736,
+  "same_major_lineage_pct": 86.8,
+  "wrong_lineage": 264,
+  "na_calls": 10,
+  "exact_match": 145,
+  "more_specific": 220,
+  "less_specific": 1371,
+  "mean_confidence": 0.9607357206779775,
+  "mean_derived_snps": 11.5725,
+  "by_major_haplogroup": {
+    "A": {
+      "total": 1,
+      "correct": 0
+    },
+    "B": {
+      "total": 6,
+      "correct": 4
+    },
+    "C": {
+      "total": 69,
+      "correct": 65
+    },
+    "D": {
+      "total": 24,
+      "correct": 22
+    },
+    "E": {
+      "total": 170,
+      "correct": 164
+    },
+    "F": {
+      "total": 1,
+      "correct": 0
+    },
+    "G": {
+      "total": 145,
+      "correct": 136
+    },
+    "H": {
+      "total": 41,
+      "correct": 28
+    },
+    "I": {
+      "total": 276,
+      "correct": 241
+    },
+    "J": {
+      "total": 191,
+      "correct": 174
+    },
+    "K": {
+      "total": 1,
+      "correct": 0
+    },
+    "L": {
+      "total": 22,
+      "correct": 22
+    },
+    "M": {
+      "total": 1,
+      "correct": 1
+    },
+    "N": {
+      "total": 55,
+      "correct": 55
+    },
+    "O": {
+      "total": 122,
+      "correct": 110
+    },
+    "P": {
+      "total": 6,
+      "correct": 2
+    },
+    "Q": {
+      "total": 199,
+      "correct": 142
+    },
+    "R": {
+      "total": 645,
+      "correct": 554
+    },
+    "S": {
+      "total": 6,
+      "correct": 1
+    },
+    "T": {
+      "total": 19,
+      "correct": 15
+    }
+  },
+  "wrong_samples": [
+    {
+      "sample": "DA125.SG",
+      "expected": "T-Y13280",
+      "called": "F",
+      "derived": 10
+    },
+    {
+      "sample": "I1709.AG",
+      "expected": "H-P96",
+      "called": "NA",
+      "derived": 0
+    },
+    {
+      "sample": "I17633.AG",
+      "expected": "J-Z593",
+      "called": "F",
+      "derived": 6
+    },
+    {
+      "sample": "RISE1.SG",
+      "expected": "R-L754",
+      "called": "CT",
+      "derived": 5
+    },
+    {
+      "sample": "I13891.TW",
+      "expected": "I-Y3709",
+      "called": "F",
+      "derived": 7
+    },
+    {
+      "sample": "TW097.SG",
+      "expected": "Q-M930",
+      "called": "F",
+      "derived": 7
+    },
+    {
+      "sample": "I5869.AG",
+      "expected": "I-Y3259",
+      "called": "F",
+      "derived": 13
+    },
+    {
+      "sample": "NEO268.SG",
+      "expected": "R-V88",
+      "called": "P-P226",
+      "derived": 2
+    },
+    {
+      "sample": "K3-12_d.SG",
+      "expected": "I-L621",
+      "called": "CT",
+      "derived": 9
+    },
+    {
+      "sample": "I20525.AG",
+      "expected": "R-L151",
+      "called": "P-P337",
+      "derived": 12
+    },
+    {
+      "sample": "I2512.AG",
+      "expected": "T-L206",
+      "called": "K",
+      "derived": 6
+    },
+    {
+      "sample": "ASH067.AG",
+      "expected": "R-M269",
+      "called": "P-P337",
+      "derived": 6
+    },
+    {
+      "sample": "I6426.AG",
+      "expected": "R-M269",
+      "called": "F",
+      "derived": 5
+    },
+    {
+      "sample": "FUT006.AG",
+      "expected": "S-Y26122",
+      "called": "F",
+      "derived": 25
+    },
+    {
+      "sample": "KIL045.B.AG",
+      "expected": "R-L52",
+      "called": "F",
+      "derived": 10
+    },
+    {
+      "sample": "WEZ64.SG",
+      "expected": "I-Z2069",
+      "called": "CT",
+      "derived": 5
+    },
+    {
+      "sample": "UGU010.AG",
+      "expected": "R-Z2124",
+      "called": "P-P337",
+      "derived": 7
+    },
+    {
+      "sample": "KD004.SG",
+      "expected": "R-DF1",
+      "called": "P-P337",
+      "derived": 7
+    },
+    {
+      "sample": "I2658.AG",
+      "expected": "I-Y3259",
+      "called": "F",
+      "derived": 6
+    },
+    {
+      "sample": "mondal_ONG-14.SG",
+      "expected": "J-PF5008",
+      "called": "I2",
+      "derived": 2
+    },
+    {
+      "sample": "NEO158.SG",
+      "expected": "R-Y13200",
+      "called": "K",
+      "derived": 6
+    },
+    {
+      "sample": "SN-04.SG",
+      "expected": "Q-L54",
+      "called": "CT",
+      "derived": 5
+    },
+    {
+      "sample": "I16389.AG",
+      "expected": "R-Y20344",
+      "called": "P-P337",
+      "derived": 3
+    },
+    {
+      "sample": "ORD014.SG",
+      "expected": "J-L283",
+      "called": "BT",
+      "derived": 6
+    },
+    {
+      "sample": "I5266.AG",
+      "expected": "O-M110",
+      "called": "F",
+      "derived": 8
+    },
+    {
+      "sample": "I10759.AG",
+      "expected": "Q-L56",
+      "called": "R-Y482",
+      "derived": 3
+    },
+    {
+      "sample": "I18091.AG",
+      "expected": "G-Z42565",
+      "called": "F",
+      "derived": 7
+    },
+    {
+      "sample": "mondal_RAI-15.SG",
+      "expected": "R-L51",
+      "called": "A-Y25015",
+      "derived": 1
+    },
+    {
+      "sample": "VK75.SG",
+      "expected": "R-M269",
+      "called": "CT",
+      "derived": 35
+    },
+    {
+      "sample": "RKF244.AG",
+      "expected": "J-CTS7738,J-M304",
+      "called": "CT",
+      "derived": 5
+    },
+    {
+      "sample": "I3324.AG",
+      "expected": "R-Z209",
+      "called": "P-P337",
+      "derived": 13
+    },
+    {
+      "sample": "I1792.AG",
+      "expected": "J-Y22662",
+      "called": "F",
+      "derived": 5
+    },
+    {
+      "sample": "I19388.AG",
+      "expected": "E-M35",
+      "called": "BT",
+      "derived": 2
+    },
+    {
+      "sample": "KH150633_d.SG",
+      "expected": "I-S6635",
+      "called": "CT",
+      "derived": 7
+    },
+    {
+      "sample": "I12648.AG",
+      "expected": "R-M269",
+      "called": "F",
+      "derived": 9
+    },
+    {
+      "sample": "I17616.AG",
+      "expected": "R-M269",
+      "called": "CT",
+      "derived": 11
+    },
+    {
+      "sample": "I16400.AG",
+      "expected": "R-S461",
+      "called": "P-P337",
+      "derived": 20
+    },
+    {
+      "sample": "I3950.SG",
+      "expected": "Q-Y6826",
+      "called": "R-L761",
+      "derived": 6
+    },
+    {
+      "sample": "GUY002.AG",
+      "expected": "Q-CTS2730",
+      "called": "R1",
+      "derived": 5
+    },
+    {
+      "sample": "I14900.AG",
+      "expected": "J-M410",
+      "called": "IJ",
+      "derived": 3
+    },
+    {
+      "sample": "I7647.AG",
+      "expected": "H-Y19962",
+      "called": "CT",
+      "derived": 4
+    },
+    {
+      "sample": "I2629_enhanced.AG",
+      "expected": "I-L161",
+      "called": "F",
+      "derived": 3
+    },
+    {
+      "sample": "geo015.SG",
+      "expected": "J-M92",
+      "called": "CT",
+      "derived": 6
+    },
+    {
+      "sample": "I12574.AG",
+      "expected": "Q-L56",
+      "called": "CT",
+      "derived": 3
+    },
+    {
+      "sample": "DER006.AG",
+      "expected": "G-PH488",
+      "called": "CT",
+      "derived": 19
+    },
+    {
+      "sample": "MX298.AG",
+      "expected": "G-P303",
+      "called": "BT",
+      "derived": 2
+    },
+    {
+      "sample": "I5872.AG",
+      "expected": "I-M436",
+      "called": "F",
+      "derived": 6
+    },
+    {
+      "sample": "MDP001.AG",
+      "expected": "R-M269",
+      "called": "K",
+      "derived": 5
+    },
+    {
+      "sample": "I10502.AG",
+      "expected": "R-V88",
+      "called": "CT",
+      "derived": 3
+    },
+    {
+      "sample": "kro009.SG",
+      "expected": "R-FGC45993",
+      "called": "NA",
+      "derived": 0
+    }
+  ],
+  "processing_time_seconds": 306.7564539909363
+}
