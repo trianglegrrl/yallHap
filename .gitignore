@@ -137,7 +137,7 @@ Thumbs.db
 
 # Cursor AI
 .cursor/
-.cursor-plans/
+.cursor/rules/*
 
 # External tools
 yhaplo/

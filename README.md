@@ -9,10 +9,22 @@ Modern, pipeline-friendly Y-chromosome haplogroup inference.
 
 - **YFull tree**: Uses the most comprehensive Y-chromosome phylogeny (185,780+ SNPs)
 - **Probabilistic scoring**: Likelihood-based confidence scores, not just SNP counting
-- **Ancient DNA support**: Built-in damage filtering for aDNA samples
-- **Multiple references**: Supports GRCh37, GRCh38, and T2T-CHM13v2.0
-- **Pipeline-friendly**: Proper exit codes, JSON/TSV output, batch processing
+- **Ancient DNA support**: Built-in damage filtering, transversions-only mode, quality rescaling
+- **Multiple references**: Supports GRCh37, GRCh38, and T2T-CHM13v2.0 with automatic liftover
+- **Batch processing**: Classify thousands of samples efficiently with `classify_batch()`
+- **Pipeline-friendly**: Proper exit codes, JSON/TSV output, Nextflow/Snakemake examples
 - **Bioconda/Docker**: Easy installation and containerized execution
+
+## Accuracy
+
+Validated against established datasets:
+
+| Dataset | Samples | Accuracy | Notes |
+|---------|---------|----------|-------|
+| 1000 Genomes Phase 3 | 1,244 males | 100% same major lineage | GRCh37, low-coverage WGS |
+| AADR Ancient DNA | 50 samples | 96% | Includes damaged aDNA |
+
+See [VALIDATION_TESTING.md](VALIDATION_TESTING.md) for reproducible validation protocols.
 
 ## Installation
 
@@ -31,37 +43,209 @@ conda install -c bioconda yallhap
 ### Docker
 
 ```bash
-docker pull yourusername/yallhap
+docker pull trianglegrrl/yallhap
 ```
 
 ### From source
 
 ```bash
-git clone https://github.com/yourusername/yallhap.git
+git clone https://github.com/trianglegrrl/yallhap.git
 cd yallhap
 pip install -e ".[dev]"
 ```
 
 ## Quick Start
 
-```bash
-# Download reference data
-yallhap download --output-dir data/
+### 1. Download reference data
 
-# Classify a sample
+```bash
+yallhap download --output-dir data/
+```
+
+This downloads:
+- YFull tree JSON (~14 MB)
+- YBrowse SNP database (~400 MB)
+
+### 2. Classify a sample
+
+```bash
 yallhap classify sample.vcf.gz \
     --tree data/yfull_tree.json \
     --snp-db data/ybrowse_snps.csv \
     --reference grch38 \
     --output result.json
+```
 
-# Ancient DNA mode
-yallhap classify ancient_sample.vcf.gz \
+### 3. View results
+
+```bash
+cat result.json | jq '.haplogroup, .confidence'
+# "R-L21"
+# 0.97
+```
+
+## Usage
+
+### Single Sample Classification
+
+```bash
+yallhap classify sample.vcf.gz \
+    --tree data/yfull_tree.json \
+    --snp-db data/ybrowse_snps.csv \
+    --reference grch38 \
+    --output result.json
+```
+
+### Multi-Sample VCF
+
+For VCFs containing multiple samples, specify which sample to classify:
+
+```bash
+yallhap classify multi_sample.vcf.gz \
+    --tree data/yfull_tree.json \
+    --snp-db data/ybrowse_snps.csv \
+    --sample NA12878 \
+    --output result.json
+```
+
+### Batch Processing
+
+Process multiple VCF files into a single TSV:
+
+```bash
+yallhap batch sample1.vcf.gz sample2.vcf.gz sample3.vcf.gz \
+    --tree data/yfull_tree.json \
+    --snp-db data/ybrowse_snps.csv \
+    --output results.tsv
+```
+
+### TSV Output Format
+
+Use `--format tsv` for tab-separated output (useful for pipelines):
+
+```bash
+yallhap classify sample.vcf.gz \
+    --tree data/yfull_tree.json \
+    --snp-db data/ybrowse_snps.csv \
+    --format tsv \
+    --output result.tsv
+```
+
+### Reference Genomes
+
+yallHap supports three reference genomes:
+
+```bash
+# GRCh37 (hg19) - default for 1000 Genomes
+yallhap classify sample.vcf.gz --reference grch37 ...
+
+# GRCh38 (hg38) - current standard
+yallhap classify sample.vcf.gz --reference grch38 ...
+
+# T2T-CHM13v2.0 - complete Y chromosome (62 Mb)
+yallhap classify sample.vcf.gz --reference t2t ...
+```
+
+**T2T Note**: T2T coordinates are computed automatically via liftover from GRCh37/38 positions. Ensure liftover chain files are available (run `python scripts/download_liftover_chains.py`).
+
+## Ancient DNA Mode
+
+yallHap includes specialized handling for ancient DNA samples with post-mortem damage.
+
+### Basic Ancient Mode
+
+Filters C>T and G>A transitions at read termini:
+
+```bash
+yallhap classify ancient.vcf.gz \
     --tree data/yfull_tree.json \
     --snp-db data/ybrowse_snps.csv \
     --ancient \
     --min-depth 1 \
     --output result.json
+```
+
+### Transversions-Only Mode
+
+Strictest mode for heavily damaged samples (ignores all transitions):
+
+```bash
+yallhap classify ancient.vcf.gz \
+    --tree data/yfull_tree.json \
+    --snp-db data/ybrowse_snps.csv \
+    --transversions-only \
+    --output result.json
+```
+
+### Damage Rescaling
+
+Downweight potentially damaged variants without excluding them:
+
+```bash
+yallhap classify ancient.vcf.gz \
+    --tree data/yfull_tree.json \
+    --snp-db data/ybrowse_snps.csv \
+    --ancient \
+    --damage-rescale moderate \
+    --output result.json
+```
+
+Options for `--damage-rescale`:
+- `none` (default): No rescaling
+- `moderate`: 50% weight reduction for damage-like transitions
+- `aggressive`: 80% weight reduction
+
+## Python API
+
+### Single Sample
+
+```python
+from yallhap.tree import Tree
+from yallhap.snps import SNPDatabase
+from yallhap.classifier import HaplogroupClassifier
+
+# Load resources
+tree = Tree.from_json("data/yfull_tree.json")
+snp_db = SNPDatabase.from_csv("data/ybrowse_snps.csv")
+
+# Create classifier
+classifier = HaplogroupClassifier(
+    tree=tree,
+    snp_db=snp_db,
+    reference="grch38",
+)
+
+# Classify
+result = classifier.classify("sample.vcf.gz")
+print(f"{result.sample}: {result.haplogroup} (confidence: {result.confidence:.2f})")
+```
+
+### Batch Classification (Multi-Sample VCF)
+
+For multi-sample VCFs, `classify_batch()` is 10x faster than calling `classify()` repeatedly:
+
+```python
+# Get list of sample names to classify
+samples = ["NA12878", "NA12891", "NA12892"]
+
+# Classify all samples in one pass
+results = classifier.classify_batch("multi_sample.vcf.gz", samples)
+
+for result in results:
+    print(f"{result.sample}: {result.haplogroup}")
+```
+
+### Ancient DNA Mode
+
+```python
+classifier = HaplogroupClassifier(
+    tree=tree,
+    snp_db=snp_db,
+    reference="grch37",
+    ancient_mode=True,
+    transversions_only=True,  # Strictest mode
+    damage_rescale="moderate",
+)
 ```
 
 ## Output Format
@@ -74,15 +258,22 @@ yallhap classify ancient_sample.vcf.gz \
   "haplogroup": "R-L21",
   "confidence": 0.97,
   "reference": "grch38",
-  "tree_version": "YFull v13.06",
+  "tree_version": "YFull",
+  "snp_stats": {
+    "informative_tested": 1247,
+    "derived": 145,
+    "ancestral": 1089,
+    "missing": 13,
+    "filtered_damage": 0
+  },
   "quality_scores": {
     "qc1_backbone": 0.98,
     "qc2_terminal": 1.0,
     "qc3_path": 0.95,
     "qc4_posterior": 0.97
   },
-  "path": ["Y-Adam", "A0-T", "...", "R-L21"],
-  "defining_snps": ["L21/M529/S145"]
+  "path": ["ROOT", "A0-T", "A1", "...", "R-L21"],
+  "defining_snps": ["L21"]
 }
 ```
 
@@ -97,7 +288,7 @@ SAMPLE1	R-L21	0.9700	0.9800	1.0000	0.9500	0.9700	145	1089	13
 
 | Code | Meaning |
 |------|---------|
-| 0 | Success (high confidence) |
+| 0 | Success (high confidence, ≥0.95) |
 | 1 | Classification failed (no haplogroup) |
 | 2 | Low confidence (<0.95) |
 | 10 | File not found |
@@ -106,14 +297,71 @@ SAMPLE1	R-L21	0.9700	0.9800	1.0000	0.9500	0.9700	145	1089	13
 
 ## Quality Scores
 
-- **QC1 (backbone)**: Intermediate markers match expected states
-- **QC2 (terminal)**: Defining markers for called haplogroup
-- **QC3 (path)**: Within-haplogroup consistency
-- **QC4 (posterior)**: Overall posterior probability
+| Score | Name | Description |
+|-------|------|-------------|
+| QC1 | Backbone | Intermediate markers on path to haplogroup match expected states |
+| QC2 | Terminal | Defining markers for called haplogroup are present |
+| QC3 | Path | Consistency within the called haplogroup branch |
+| QC4 | Posterior | Overall posterior probability from likelihood calculation |
+
+## CLI Reference
+
+### `yallhap classify`
+
+Classify a single VCF file.
+
+```
+Usage: yallhap classify [OPTIONS] VCF
+
+Options:
+  -t, --tree PATH          Path to YFull tree JSON [required]
+  -s, --snp-db PATH        Path to SNP database CSV [required]
+  -r, --reference TEXT     Reference genome: grch37, grch38, t2t [default: grch38]
+  --sample TEXT            Sample name (for multi-sample VCFs)
+  --ancient                Enable ancient DNA mode
+  --transversions-only     Only use transversions (strictest aDNA mode)
+  --damage-rescale TEXT    Rescale quality: none, moderate, aggressive
+  --min-depth INTEGER      Minimum read depth [default: 1]
+  --min-quality INTEGER    Minimum base quality [default: 20]
+  -o, --output PATH        Output file (stdout if omitted)
+  --format TEXT            Output format: json, tsv [default: json]
+```
+
+### `yallhap batch`
+
+Batch process multiple VCF files.
+
+```
+Usage: yallhap batch [OPTIONS] VCF_FILES...
+
+Options:
+  -t, --tree PATH          Path to YFull tree JSON [required]
+  -s, --snp-db PATH        Path to SNP database CSV [required]
+  -r, --reference TEXT     Reference genome: grch37, grch38, t2t [default: grch38]
+  --ancient                Enable ancient DNA mode
+  --transversions-only     Only use transversions
+  --damage-rescale TEXT    Rescale quality: none, moderate, aggressive
+  -o, --output PATH        Output TSV file [required]
+  --threads INTEGER        Parallel threads [default: 1]
+```
+
+### `yallhap download`
+
+Download reference data.
+
+```
+Usage: yallhap download [OPTIONS]
+
+Options:
+  -o, --output-dir PATH    Output directory [default: data/]
+  -f, --force              Overwrite existing files
+```
 
 ## Pipeline Integration
 
 ### Nextflow
+
+See [pipelines/nextflow/](pipelines/nextflow/) for a complete example.
 
 ```nextflow
 process YALLHAP {
@@ -128,12 +376,15 @@ process YALLHAP {
     yallhap classify ${vcf} \
         --tree ${params.tree} \
         --snp-db ${params.snp_db} \
+        --reference ${params.reference} \
         --output ${vcf.baseName}.json
     """
 }
 ```
 
 ### Snakemake
+
+See [pipelines/snakemake/](pipelines/snakemake/) for a complete example.
 
 ```python
 rule yallhap:
@@ -157,7 +408,7 @@ rule yallhap:
 
 ```bash
 # Clone repository
-git clone https://github.com/yourusername/yallhap.git
+git clone https://github.com/trianglegrrl/yallhap.git
 cd yallhap
 
 # Install with dev dependencies
@@ -190,6 +441,7 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ## Acknowledgments
 
-- YFull for maintaining the comprehensive Y-chromosome phylogeny
-- YBrowse for the SNP database
+- [YFull](https://www.yfull.com/) for maintaining the comprehensive Y-chromosome phylogeny
+- [YBrowse](http://ybrowse.org/) for the SNP database
 - Yleaf and pathPhynder for algorithmic inspiration
+- 1000 Genomes Project and AADR for validation data
