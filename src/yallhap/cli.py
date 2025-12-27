@@ -434,6 +434,15 @@ def _write_result(
         if result.posterior is not None:
             header.extend(["posterior", "credible_set_95"])
 
+        # Add ISOGG column if present
+        isogg_hg = extra_data.get("isogg_haplogroup") if extra_data else None
+        if isogg_hg is not None:
+            header.append("isogg_haplogroup")
+
+        # Add contamination columns if present
+        if extra_data and extra_data.get("contamination_rate") is not None:
+            header.extend(["contamination_rate", "contamination_sites"])
+
         file.write("\t".join(header) + "\n")
 
         # Data
@@ -456,6 +465,19 @@ def _write_result(
                 [
                     f"{result.posterior:.4f}",
                     ";".join(result.credible_set_95),
+                ]
+            )
+
+        # Add ISOGG value if present
+        if isogg_hg is not None:
+            row.append(isogg_hg)
+
+        # Add contamination values if present
+        if extra_data and extra_data.get("contamination_rate") is not None:
+            row.extend(
+                [
+                    f"{extra_data['contamination_rate']:.4f}",
+                    str(extra_data["contamination_sites"]),
                 ]
             )
 
