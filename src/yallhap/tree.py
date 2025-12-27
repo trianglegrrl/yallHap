@@ -7,8 +7,10 @@ and provides efficient lookup and traversal operations.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Iterator
 
@@ -58,6 +60,9 @@ class Tree:
     def __init__(self) -> None:
         self._nodes: dict[str, Node] = {}
         self._root: Node | None = None
+        self._file_hash: str | None = None
+        self._file_date: datetime | None = None
+        self._source_path: Path | None = None
 
     @classmethod
     def from_json(cls, path: Path | str) -> Tree:
@@ -78,9 +83,22 @@ class Tree:
         tree = cls()
         path = Path(path)
 
-        with open(path) as f:
-            data = json.load(f)
+        # Read file content for parsing and hashing
+        with open(path, "rb") as f:
+            content = f.read()
 
+        # Compute SHA256 hash of file content
+        tree._file_hash = hashlib.sha256(content).hexdigest()[:8]
+        tree._source_path = path
+
+        # Get file modification time if available
+        try:
+            tree._file_date = datetime.fromtimestamp(path.stat().st_mtime)
+        except OSError:
+            tree._file_date = None
+
+        # Parse JSON and build tree
+        data = json.loads(content.decode("utf-8"))
         tree._build_from_dict(data)
         return tree
 
@@ -234,6 +252,39 @@ class Tree:
     def nodes(self) -> dict[str, Node]:
         """Return dictionary of all nodes keyed by name."""
         return self._nodes
+
+    @property
+    def snp_count(self) -> int:
+        """Return total number of SNPs across all nodes."""
+        return sum(len(node.snps) for node in self._nodes.values())
+
+    @property
+    def version_info(self) -> dict:
+        """
+        Return version metadata for reproducibility.
+
+        Returns:
+            Dictionary with source, node_count, snp_count, file_hash, and file_date
+        """
+        return {
+            "source": "YFull",
+            "node_count": len(self._nodes),
+            "snp_count": self.snp_count,
+            "file_hash": self._file_hash,
+            "file_date": self._file_date.isoformat() if self._file_date else None,
+        }
+
+    @property
+    def version_string(self) -> str:
+        """
+        Return formatted version string for output.
+
+        Example: "YFull (185780 SNPs, hash: a1b2c3d4)"
+        """
+        snp_count = self.snp_count
+        if self._file_hash:
+            return f"YFull ({snp_count} SNPs, hash: {self._file_hash})"
+        return f"YFull ({snp_count} SNPs)"
 
     def get(self, name: str) -> Node:
         """

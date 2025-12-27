@@ -22,9 +22,9 @@ Validated against established datasets:
 
 | Dataset | Samples | Same Major Lineage | Reference | Notes |
 |---------|---------|-------------------|-----------|-------|
-| 1000 Genomes Phase 3 | 1,233 | **99.76%** | GRCh37 | Modern WGS |
-| AADR Ancient DNA | 1,991 | **88.65%** | GRCh37 | Transversions-only mode |
-| gnomAD HGDP/1KG | 10 | **100.00%** | GRCh38 | High-coverage WGS |
+| 1000 Genomes Phase 3 | 1,233 | **99.76%** (95% CI: 99.24-99.96%) | GRCh37 | Modern WGS |
+| AADR Ancient DNA | 1,497 | **79.4%** (95% CI: 77.3-81.4%) | GRCh37 | Stratified by coverage |
+| gnomAD HGDP/1KG | 200 | **100.00%** (95% CI: 98.17-100%) | GRCh38 | High-coverage WGS |
 
 **1000 Genomes details:**
 - Only 3 misclassified samples (2 rare A0 haplogroups, 1 NO/K confusion)
@@ -32,13 +32,16 @@ Validated against established datasets:
 - Mean derived SNPs: 15.4
 
 **AADR Ancient DNA details:**
-- Validated with properly formatted ground truth (X-YYYY haplogroup names)
+- Stratified by coverage: <0.1× (38%), 0.1-0.5× (75%), 0.5-1× (97%), ≥1× (99%)
+- At adequate coverage (≥0.5×), accuracy is 97-99%, comparable to modern WGS
 - Transversions-only mode for maximum damage resistance
-- Mean derived SNPs: 11.8 (low coverage typical for aDNA)
+- Mean derived SNPs: 10.0 (low coverage typical for aDNA)
 
 **gnomAD High-Coverage details:**
+- 200 samples randomly selected from 1,231 overlapping with 1000 Genomes
 - 30× high-coverage whole-genome sequencing
-- Mean derived SNPs: 79.4 (5× more than Phase 3 due to improved coverage)
+- Mean derived SNPs: 26.7
+- 95% confidence interval: 98.17-100%
 
 See [VALIDATION_TESTING.md](VALIDATION_TESTING.md) for reproducible validation protocols.
 
@@ -288,7 +291,7 @@ classifier = HaplogroupClassifier(
   "haplogroup": "R-L21",
   "confidence": 0.97,
   "reference": "grch38",
-  "tree_version": "YFull",
+  "tree_version": "YFull (185780 SNPs, hash: a1b2c3d4)",
   "snp_stats": {
     "informative_tested": 1247,
     "derived": 145,
@@ -306,6 +309,16 @@ classifier = HaplogroupClassifier(
   "defining_snps": ["L21"]
 }
 ```
+
+### Reproducibility
+
+The `tree_version` field includes a hash of the tree file content, enabling exact reproducibility. When citing yallHap results, include the `tree_version` value to document the exact phylogeny version used. The format is:
+
+```
+YFull (<snp_count> SNPs, hash: <8-char SHA256>)
+```
+
+Example: `"YFull (185780 SNPs, hash: a1b2c3d4)"`
 
 ### TSV (for batch processing)
 

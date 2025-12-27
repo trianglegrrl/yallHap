@@ -349,7 +349,7 @@ class HaplogroupClassifier:
                 alternatives=alternatives,
                 snp_stats=stats,
                 reference=self.reference,
-                tree_version="YFull",
+                tree_version=self.tree.version_string,
             )
 
         # Classify samples (parallel if threads > 1)
@@ -432,7 +432,7 @@ class HaplogroupClassifier:
             alternatives=alternatives,
             snp_stats=stats,
             reference=self.reference,
-            tree_version="YFull",  # TODO: get actual version
+            tree_version=self.tree.version_string,
         )
 
     def _classify_bayesian(
@@ -467,7 +467,7 @@ class HaplogroupClassifier:
                 haplogroup="NA",
                 confidence=0.0,
                 reference=self.reference,
-                tree_version="YFull",
+                tree_version=self.tree.version_string,
             )
 
         # Get best haplogroup and credible set
@@ -534,7 +534,7 @@ class HaplogroupClassifier:
             alternatives=alternatives,
             snp_stats=stats,
             reference=self.reference,
-            tree_version="YFull",
+            tree_version=self.tree.version_string,
             posterior=best_prob,
             credible_set_95=credible_set,
             log_likelihood=None,  # Could add if needed

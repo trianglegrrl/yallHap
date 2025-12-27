@@ -11,7 +11,7 @@ Snakemake workflow for Y-chromosome haplogroup inference using yallHap.
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/yallhap.git
+git clone https://github.com/trianglegrrl/yallhap.git
 cd yallhap/pipelines/snakemake
 
 # Create sample sheet

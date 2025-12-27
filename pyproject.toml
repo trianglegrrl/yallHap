@@ -48,6 +48,7 @@ dev = [
     "types-requests>=2.28.0",
     "tqdm>=4.65.0",
     "rich>=13.0.0",
+    "matplotlib>=3.7.0",
 ]
 
 [project.scripts]
@@ -55,10 +56,10 @@ yallhap = "yallhap.cli:main"
 yallHap = "yallhap.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/yourusername/yallhap"
-Documentation = "https://github.com/yourusername/yallhap#readme"
-Repository = "https://github.com/yourusername/yallhap"
-Issues = "https://github.com/yourusername/yallhap/issues"
+Homepage = "https://github.com/trianglegrrl/yallhap"
+Documentation = "https://github.com/trianglegrrl/yallhap#readme"
+Repository = "https://github.com/trianglegrrl/yallhap"
+Issues = "https://github.com/trianglegrrl/yallhap/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]

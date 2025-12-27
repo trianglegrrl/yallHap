@@ -79,7 +79,7 @@ class TestHaplogroupCall:
             alternatives=[("R1b", 0.8)],
             snp_stats=SNPStats(100, 50, 40, 10),
             reference="grch38",
-            tree_version="YFull v13",
+            tree_version="YFull (185780 SNPs, hash: a1b2c3d4)",
         )
 
         d = call.to_dict()
@@ -88,6 +88,28 @@ class TestHaplogroupCall:
         assert d["confidence"] == 0.95
         assert "quality_scores" in d
         assert d["quality_scores"]["qc1_backbone"] == 0.9
+        assert "YFull" in d["tree_version"]
+
+    def test_tree_version_contains_metadata(self) -> None:
+        """Test that tree_version contains meaningful metadata."""
+        call = HaplogroupCall(
+            sample="TEST",
+            haplogroup="R-L21",
+            confidence=0.95,
+            qc_scores=QCScores(0.9, 1.0, 0.95, 0.95),
+            path=["ROOT", "R", "R-L21"],
+            defining_snps=["L21"],
+            alternatives=[],
+            snp_stats=SNPStats(100, 50, 40, 10),
+            reference="grch38",
+            tree_version="YFull (185780 SNPs, hash: a1b2c3d4)",
+        )
+
+        d = call.to_dict()
+        # tree_version should contain source, SNP count, and hash
+        assert "YFull" in d["tree_version"]
+        assert "SNPs" in d["tree_version"]
+        assert "hash:" in d["tree_version"]
 
 
 class TestHaplogroupClassifier:
