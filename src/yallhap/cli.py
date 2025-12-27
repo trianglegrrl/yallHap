@@ -625,53 +625,73 @@ def _download_with_progress(
 )
 def download(output_dir: Path, force: bool) -> None:
     """
-    Download YFull tree and SNP database.
+    Download YFull tree and SNP databases for all reference genomes.
 
-    Downloads the latest YFull tree from GitHub and YBrowse SNP database.
+    Downloads:
+    - YFull tree from GitHub
+    - YBrowse SNP database (GRCh38/hg38 positions)
+    - YBrowse SNP database (GRCh37/hg19 positions)
+
+    Use the appropriate SNP database for your VCF reference:
+    - GRCh37/hg19 VCFs: ybrowse_snps_grch37.csv
+    - GRCh38/hg38 VCFs: ybrowse_snps_grch38.csv
+    - T2T VCFs: ybrowse_snps_grch38.csv (positions lifted over automatically)
+
     Skips files that already exist unless --force is specified.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Define files to download
-    tree_url = "https://raw.githubusercontent.com/YFullTeam/YTree/master/current_tree.json"
-    tree_path = output_dir / "yfull_tree.json"
-    snp_url = "http://ybrowse.org/gbrowse2/gff/snps_hg38.csv"
-    snp_path = output_dir / "ybrowse_snps.csv"
+    files_to_download = [
+        {
+            "url": "https://raw.githubusercontent.com/YFullTeam/YTree/master/current_tree.json",
+            "path": output_dir / "yfull_tree.json",
+            "label": "YFull tree",
+        },
+        {
+            "url": "http://ybrowse.org/gbrowse2/gff/snps_hg38.csv",
+            "path": output_dir / "ybrowse_snps_grch38.csv",
+            "label": "YBrowse SNPs (GRCh38)",
+        },
+        {
+            "url": "http://ybrowse.org/gbrowse2/gff/snps_hg19.csv",
+            "path": output_dir / "ybrowse_snps_grch37.csv",
+            "label": "YBrowse SNPs (GRCh37)",
+        },
+    ]
 
-    # Check existing files
-    tree_exists = tree_path.exists()
-    snp_exists = snp_path.exists()
+    # Check which files already exist
+    all_exist = all(f["path"].exists() for f in files_to_download)
 
-    if tree_exists and snp_exists and not force:
-        click.echo(f"Files already exist in {output_dir}/", err=True)
-        click.echo(f"  - {tree_path.name}", err=True)
-        click.echo(f"  - {snp_path.name}", err=True)
+    if all_exist and not force:
+        click.echo(f"All files already exist in {output_dir}/", err=True)
+        for f in files_to_download:
+            click.echo(f"  - {f['path'].name}", err=True)
         click.echo("Use --force to re-download.", err=True)
         sys.exit(0)
 
-    # Download YFull tree
-    if tree_exists and not force:
-        click.echo(f"Skipping {tree_path.name} (exists)", err=True)
-    else:
-        try:
-            _download_with_progress(tree_url, tree_path, "YFull tree")
-            click.echo(f"  Saved to {tree_path}", err=True)
-        except Exception as e:
-            click.echo(f"  Failed to download YFull tree: {e}", err=True)
-            sys.exit(1)
+    # Download each file
+    failed = False
+    for f in files_to_download:
+        if f["path"].exists() and not force:
+            click.echo(f"Skipping {f['path'].name} (exists)", err=True)
+        else:
+            try:
+                _download_with_progress(f["url"], f["path"], f["label"])
+                click.echo(f"  Saved to {f['path']}", err=True)
+            except Exception as e:
+                click.echo(f"  Failed to download {f['label']}: {e}", err=True)
+                failed = True
 
-    # Download YBrowse SNP database
-    if snp_exists and not force:
-        click.echo(f"Skipping {snp_path.name} (exists)", err=True)
-    else:
-        try:
-            _download_with_progress(snp_url, snp_path, "YBrowse SNPs")
-            click.echo(f"  Saved to {snp_path}", err=True)
-        except Exception as e:
-            click.echo(f"  Failed to download SNP database: {e}", err=True)
-            sys.exit(1)
+    if failed:
+        click.echo("\nSome downloads failed. Re-run with --force to retry.", err=True)
+        sys.exit(1)
 
-    click.echo("Download complete!", err=True)
+    click.echo("\nDownload complete!", err=True)
+    click.echo("\nUsage:", err=True)
+    click.echo("  GRCh37/hg19 VCFs: -s ybrowse_snps_grch37.csv -r grch37", err=True)
+    click.echo("  GRCh38/hg38 VCFs: -s ybrowse_snps_grch38.csv -r grch38", err=True)
+    click.echo("  T2T VCFs:         -s ybrowse_snps_grch38.csv -r t2t", err=True)
 
 
 if __name__ == "__main__":

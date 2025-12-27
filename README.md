@@ -83,15 +83,26 @@ yallhap download --output-dir data/
 
 This downloads:
 - YFull tree JSON (~14 MB)
-- YBrowse SNP database (~400 MB)
+- YBrowse SNP database for GRCh38 (~430 MB)
+- YBrowse SNP database for GRCh37 (~50 MB)
 
 ### 2. Classify a sample
 
+Use the SNP database matching your VCF's reference genome:
+
 ```bash
+# For GRCh38/hg38 VCFs
 yallhap classify sample.vcf.gz \
     --tree data/yfull_tree.json \
-    --snp-db data/ybrowse_snps.csv \
+    --snp-db data/ybrowse_snps_grch38.csv \
     --reference grch38 \
+    --output result.json
+
+# For GRCh37/hg19 VCFs  
+yallhap classify sample.vcf.gz \
+    --tree data/yfull_tree.json \
+    --snp-db data/ybrowse_snps_grch37.csv \
+    --reference grch37 \
     --output result.json
 ```
 
@@ -110,7 +121,7 @@ cat result.json | jq '.haplogroup, .confidence'
 ```bash
 yallhap classify sample.vcf.gz \
     --tree data/yfull_tree.json \
-    --snp-db data/ybrowse_snps.csv \
+    --snp-db data/ybrowse_snps_grch38.csv \
     --reference grch38 \
     --output result.json
 ```
@@ -122,7 +133,7 @@ For VCFs containing multiple samples, specify which sample to classify:
 ```bash
 yallhap classify multi_sample.vcf.gz \
     --tree data/yfull_tree.json \
-    --snp-db data/ybrowse_snps.csv \
+    --snp-db data/ybrowse_snps_grch38.csv \
     --sample NA12878 \
     --output result.json
 ```
@@ -134,7 +145,7 @@ Process multiple VCF files into a single TSV:
 ```bash
 yallhap batch sample1.vcf.gz sample2.vcf.gz sample3.vcf.gz \
     --tree data/yfull_tree.json \
-    --snp-db data/ybrowse_snps.csv \
+    --snp-db data/ybrowse_snps_grch38.csv \
     --output results.tsv
 ```
 
@@ -145,7 +156,7 @@ Use multiple threads for faster batch processing:
 ```bash
 yallhap batch samples/*.vcf.gz \
     --tree data/yfull_tree.json \
-    --snp-db data/ybrowse_snps.csv \
+    --snp-db data/ybrowse_snps_grch38.csv \
     --threads 16 \
     --output results.tsv
 ```
@@ -159,27 +170,36 @@ Use `--format tsv` for tab-separated output (useful for pipelines):
 ```bash
 yallhap classify sample.vcf.gz \
     --tree data/yfull_tree.json \
-    --snp-db data/ybrowse_snps.csv \
+    --snp-db data/ybrowse_snps_grch38.csv \
     --format tsv \
     --output result.tsv
 ```
 
 ### Reference Genomes
 
-yallHap supports three reference genomes:
+yallHap supports three reference genomes. **Use the SNP database matching your VCF's reference**:
+
+| VCF Reference | SNP Database | `-r` flag |
+|---------------|--------------|-----------|
+| GRCh37/hg19 | `ybrowse_snps_grch37.csv` | `grch37` |
+| GRCh38/hg38 | `ybrowse_snps_grch38.csv` | `grch38` |
+| T2T-CHM13v2.0 | `ybrowse_snps_grch38.csv` | `t2t` |
 
 ```bash
-# GRCh37 (hg19) - default for 1000 Genomes
-yallhap classify sample.vcf.gz --reference grch37 ...
+# GRCh37 (hg19) - 1000 Genomes Phase 3, many ancient DNA datasets
+yallhap classify sample.vcf.gz \
+    -s data/ybrowse_snps_grch37.csv -r grch37 ...
 
-# GRCh38 (hg38) - current standard
-yallhap classify sample.vcf.gz --reference grch38 ...
+# GRCh38 (hg38) - current standard, gnomAD, most modern studies
+yallhap classify sample.vcf.gz \
+    -s data/ybrowse_snps_grch38.csv -r grch38 ...
 
 # T2T-CHM13v2.0 - complete Y chromosome (62 Mb)
-yallhap classify sample.vcf.gz --reference t2t ...
+yallhap classify sample.vcf.gz \
+    -s data/ybrowse_snps_grch38.csv -r t2t ...
 ```
 
-**T2T Note**: T2T coordinates are computed automatically via liftover from GRCh37/38 positions. Ensure liftover chain files are available (run `python scripts/download_liftover_chains.py`).
+**T2T Note**: T2T coordinates are computed automatically via liftover from GRCh38 positions. Ensure liftover chain files are available (run `python scripts/download_liftover_chains.py`).
 
 ## Ancient DNA Mode
 
@@ -192,7 +212,7 @@ Filters C>T and G>A transitions at read termini:
 ```bash
 yallhap classify ancient.vcf.gz \
     --tree data/yfull_tree.json \
-    --snp-db data/ybrowse_snps.csv \
+    --snp-db data/ybrowse_snps_grch38.csv \
     --ancient \
     --min-depth 1 \
     --output result.json
@@ -205,7 +225,7 @@ Strictest mode for heavily damaged samples (ignores all transitions):
 ```bash
 yallhap classify ancient.vcf.gz \
     --tree data/yfull_tree.json \
-    --snp-db data/ybrowse_snps.csv \
+    --snp-db data/ybrowse_snps_grch38.csv \
     --transversions-only \
     --output result.json
 ```
@@ -217,7 +237,7 @@ Downweight potentially damaged variants without excluding them:
 ```bash
 yallhap classify ancient.vcf.gz \
     --tree data/yfull_tree.json \
-    --snp-db data/ybrowse_snps.csv \
+    --snp-db data/ybrowse_snps_grch38.csv \
     --ancient \
     --damage-rescale moderate \
     --output result.json
@@ -239,7 +259,7 @@ from yallhap.classifier import HaplogroupClassifier
 
 # Load resources
 tree = Tree.from_json("data/yfull_tree.json")
-snp_db = SNPDatabase.from_csv("data/ybrowse_snps.csv")
+snp_db = SNPDatabase.from_csv("data/ybrowse_snps_grch38.csv")
 
 # Create classifier
 classifier = HaplogroupClassifier(
@@ -390,7 +410,7 @@ Options:
 
 ### `yallhap download`
 
-Download reference data.
+Download reference data (YFull tree + SNP databases for all reference genomes).
 
 ```
 Usage: yallhap download [OPTIONS]
@@ -399,6 +419,11 @@ Options:
   -o, --output-dir PATH    Output directory [default: data/]
   -f, --force              Overwrite existing files
 ```
+
+Downloads:
+- `yfull_tree.json` - YFull phylogenetic tree (~14 MB)
+- `ybrowse_snps_grch38.csv` - SNP positions for GRCh38/hg38 (~430 MB)
+- `ybrowse_snps_grch37.csv` - SNP positions for GRCh37/hg19 (~50 MB)
 
 ## Pipeline Integration
 
@@ -456,7 +481,7 @@ An experimental Bayesian classification mode is available that computes true pos
 ```bash
 yallhap classify sample.vcf.gz \
     --tree data/yfull_tree.json \
-    --snp-db data/ybrowse_snps.csv \
+    --snp-db data/ybrowse_snps_grch38.csv \
     --bayesian \
     --output result.json
 ```
