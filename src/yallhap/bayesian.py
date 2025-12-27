@@ -12,11 +12,76 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import Literal
 
-from yallhap.scoring import score_variant_with_ad, VariantScore
-from yallhap.snps import SNP, SNPDatabase, ReferenceGenome
-from yallhap.tree import Tree, Node
+from yallhap.scoring import score_variant_with_ad
+from yallhap.snps import SNP, ReferenceGenome, SNPDatabase
+from yallhap.tree import Tree
 from yallhap.vcf import Variant
+
+# Type alias for prior types
+PriorType = Literal["uniform", "coalescent"]
+
+
+def compute_coalescent_prior(
+    tree: Tree,
+    prior_type: PriorType = "uniform",
+) -> dict[str, float]:
+    """
+    Compute prior probabilities for all haplogroups in tree.
+
+    Based on pathPhynder's calculate.prior function. For coalescent prior,
+    edge lengths (number of SNPs) are used to weight the prior probability.
+    Longer edges (more mutations) have higher prior probability as they
+    represent more "sampling space" in the coalescent.
+
+    Args:
+        tree: Y-chromosome phylogenetic tree
+        prior_type: Type of prior to compute:
+            - "uniform": Equal weight to all haplogroups
+            - "coalescent": Weight proportional to edge length (SNP count)
+
+    Returns:
+        Dict of haplogroup -> prior probability (sums to 1.0)
+    """
+    all_nodes = list(tree.nodes.keys())
+    n = len(all_nodes)
+
+    if n == 0:
+        return {}
+
+    if prior_type == "uniform":
+        # Equal weight to all haplogroups
+        prior = 1.0 / n
+        return dict.fromkeys(all_nodes, prior)
+
+    # Coalescent prior: weight by edge length (SNP count)
+    # If no SNP counts available, fall back to uniform
+    edge_lengths: dict[str, float] = {}
+    has_snp_counts = False
+
+    for node_name in all_nodes:
+        node = tree.get(node_name)
+        # Try to get SNP count (edge length)
+        snp_count = getattr(node, "_snp_count", None)
+        if snp_count is not None and snp_count > 0:
+            has_snp_counts = True
+            edge_lengths[node_name] = float(snp_count)
+        else:
+            # Default edge length of 1
+            edge_lengths[node_name] = 1.0
+
+    if not has_snp_counts:
+        # No edge length info - fall back to uniform
+        prior = 1.0 / n
+        return dict.fromkeys(all_nodes, prior)
+
+    # Normalize edge lengths to probabilities
+    total_length = sum(edge_lengths.values())
+    if total_length == 0:
+        total_length = 1.0
+
+    return {hg: length / total_length for hg, length in edge_lengths.items()}
 
 
 @dataclass
@@ -170,6 +235,7 @@ class BayesianClassifier:
         damage_rate: float = 0.1,
         reference: ReferenceGenome = "grch38",
         use_haplogroup_prior: bool = False,
+        prior_type: PriorType = "uniform",
     ):
         """
         Initialize Bayesian classifier.
@@ -180,7 +246,8 @@ class BayesianClassifier:
             error_rate: Expected sequencing error rate
             damage_rate: Expected ancient DNA damage rate (for is_ancient mode)
             reference: Reference genome for position lookup
-            use_haplogroup_prior: Whether to use population-based priors
+            use_haplogroup_prior: Whether to use population-based priors (deprecated)
+            prior_type: Type of prior to use ("uniform" or "coalescent")
         """
         self.tree = tree
         self.snp_db = snp_db
@@ -188,6 +255,10 @@ class BayesianClassifier:
         self.damage_rate = damage_rate
         self.reference = reference
         self.use_haplogroup_prior = use_haplogroup_prior
+        self.prior_type = prior_type
+
+        # Compute prior based on prior_type
+        self._prior = compute_coalescent_prior(tree, prior_type)
 
         # Build mapping from haplogroup -> SNPs
         self._haplogroup_snps: dict[str, list[SNP]] = {}
@@ -264,9 +335,7 @@ class BayesianClassifier:
         path_log_likelihoods: dict[str, float] = {}
 
         for haplogroup in self.tree.nodes:
-            path_ll = compute_path_likelihood(
-                self.tree, haplogroup, branch_likelihoods
-            )
+            path_ll = compute_path_likelihood(self.tree, haplogroup, branch_likelihoods)
             path_log_likelihoods[haplogroup] = path_ll
 
         # Convert log-likelihoods to posteriors using log-sum-exp trick
@@ -277,13 +346,16 @@ class BayesianClassifier:
 
         max_log_lik = max(log_liks)
 
-        # Compute unnormalized posteriors
+        # Compute unnormalized posteriors with prior
         unnormalized: dict[str, float] = {}
         for hg, log_lik in path_log_likelihoods.items():
-            # Use uniform prior (or could implement population priors)
-            log_prior = 0.0  # Uniform prior
+            # Get prior for this haplogroup
+            prior = self._prior.get(hg, 1.0 / len(path_log_likelihoods))
 
             # Posterior ∝ likelihood × prior
+            # In log space: log(posterior) ∝ log(likelihood) + log(prior)
+            log_prior = math.log(prior) if prior > 0 else -100.0
+
             unnormalized[hg] = math.exp(log_lik - max_log_lik + log_prior)
 
         # Normalize to sum to 1
@@ -350,5 +422,3 @@ class BayesianClassifier:
         credible_set = self.get_credible_set(posteriors, threshold=0.95)
 
         return (best_hg, best_prob, credible_set)
-
-

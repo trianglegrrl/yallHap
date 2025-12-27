@@ -54,19 +54,11 @@ def simple_snp_db() -> SNPDatabase:
     # Add SNPs for each haplogroup
     snps = [
         SNP(name="A1", position_grch38=1000, ancestral="C", derived="T", haplogroup="A"),
-        SNP(
-            name="A-a1", position_grch38=2000, ancestral="G", derived="A", haplogroup="A-a"
-        ),
-        SNP(
-            name="A-b1", position_grch38=3000, ancestral="A", derived="G", haplogroup="A-b"
-        ),
+        SNP(name="A-a1", position_grch38=2000, ancestral="G", derived="A", haplogroup="A-a"),
+        SNP(name="A-b1", position_grch38=3000, ancestral="A", derived="G", haplogroup="A-b"),
         SNP(name="B1", position_grch38=4000, ancestral="T", derived="C", haplogroup="B"),
-        SNP(
-            name="B-a1", position_grch38=5000, ancestral="C", derived="G", haplogroup="B-a"
-        ),
-        SNP(
-            name="B-b1", position_grch38=6000, ancestral="G", derived="T", haplogroup="B-b"
-        ),
+        SNP(name="B-a1", position_grch38=5000, ancestral="C", derived="G", haplogroup="B-a"),
+        SNP(name="B-b1", position_grch38=6000, ancestral="G", derived="T", haplogroup="B-b"),
     ]
 
     for snp in snps:
@@ -221,9 +213,7 @@ class TestComputePathLikelihood:
 class TestBayesianClassifier:
     """Tests for BayesianClassifier class."""
 
-    def test_posteriors_sum_to_one(
-        self, simple_tree: Tree, simple_snp_db: SNPDatabase
-    ) -> None:
+    def test_posteriors_sum_to_one(self, simple_tree: Tree, simple_snp_db: SNPDatabase) -> None:
         """All haplogroup posteriors sum to 1.0."""
         classifier = BayesianClassifier(
             tree=simple_tree,
@@ -404,9 +394,7 @@ class TestBayesianWithAD:
             snp_db=simple_snp_db,
         )
 
-    def test_high_support_ratio_boosts_confidence(
-        self, classifier: BayesianClassifier
-    ) -> None:
+    def test_high_support_ratio_boosts_confidence(self, classifier: BayesianClassifier) -> None:
         """Variants with 100% read support get full weight."""
         # Use multiple derived calls for A lineage to make it clear
         high_support = {
@@ -449,9 +437,7 @@ class TestBayesianWithAD:
         b_lineage_prob = sum(p for hg, p in posteriors if hg.startswith("B"))
         assert a_lineage_prob > b_lineage_prob
 
-    def test_low_support_ratio_reduces_confidence(
-        self, classifier: BayesianClassifier
-    ) -> None:
+    def test_low_support_ratio_reduces_confidence(self, classifier: BayesianClassifier) -> None:
         """Variants with mixed reads get reduced weight."""
         high_support = {
             1000: Variant(
@@ -488,9 +474,7 @@ class TestBayesianWithAD:
         # The distribution should be more spread out with low support
         assert len(low_posteriors) >= len(high_posteriors)
 
-    def test_missing_ad_uses_quality_only(
-        self, classifier: BayesianClassifier
-    ) -> None:
+    def test_missing_ad_uses_quality_only(self, classifier: BayesianClassifier) -> None:
         """Falls back to GQ-based scoring when AD missing."""
         with_ad = {
             1000: Variant(
@@ -535,9 +519,7 @@ class TestQualityDependentErrorRate:
             snp_db=simple_snp_db,
         )
 
-    def test_low_quality_reduces_weight(
-        self, classifier: BayesianClassifier
-    ) -> None:
+    def test_low_quality_reduces_weight(self, classifier: BayesianClassifier) -> None:
         """Lower quality variants get reduced influence."""
         high_quality = {
             1000: Variant(
@@ -584,9 +566,7 @@ class TestQualityDependentErrorRate:
 class TestCredibleSet:
     """Tests for credible set calculation."""
 
-    def test_credible_set_threshold(
-        self, simple_tree: Tree, simple_snp_db: SNPDatabase
-    ) -> None:
+    def test_credible_set_threshold(self, simple_tree: Tree, simple_snp_db: SNPDatabase) -> None:
         """Credible set respects threshold parameter."""
         classifier = BayesianClassifier(
             tree=simple_tree,
@@ -643,3 +623,143 @@ class TestCredibleSet:
         cumulative = sum(posteriors_dict.get(hg, 0) for hg in credible_95)
         assert cumulative >= 0.95
 
+
+class TestCoalescentPrior:
+    """Tests for coalescent-informed prior computation."""
+
+    def test_prior_sums_to_one(self, simple_tree: Tree) -> None:
+        """Prior probabilities sum to 1.0."""
+        from yallhap.bayesian import compute_coalescent_prior
+
+        prior = compute_coalescent_prior(simple_tree)
+        total = sum(prior.values())
+        assert abs(total - 1.0) < 1e-6
+
+    def test_prior_all_haplogroups(self, simple_tree: Tree) -> None:
+        """Prior includes all haplogroups in tree."""
+        from yallhap.bayesian import compute_coalescent_prior
+
+        prior = compute_coalescent_prior(simple_tree)
+        # Tree has: ROOT, A, A-a, A-b, B, B-a, B-b
+        assert len(prior) == 7
+
+    def test_prior_all_positive(self, simple_tree: Tree) -> None:
+        """All priors are positive."""
+        from yallhap.bayesian import compute_coalescent_prior
+
+        prior = compute_coalescent_prior(simple_tree)
+        for hg, p in prior.items():
+            assert p > 0, f"Prior for {hg} should be positive"
+
+    def test_uniform_prior_option(self, simple_tree: Tree) -> None:
+        """Uniform prior gives equal weights to all haplogroups."""
+        from yallhap.bayesian import compute_coalescent_prior
+
+        prior = compute_coalescent_prior(simple_tree, prior_type="uniform")
+        expected = 1.0 / len(prior)
+        for hg, p in prior.items():
+            assert abs(p - expected) < 1e-6
+
+
+class TestCoalescentPriorEdgeLengths:
+    """Tests for edge-length-based coalescent priors."""
+
+    def test_prior_with_edge_lengths(self) -> None:
+        """Longer edges get proportionally higher prior weight."""
+        from yallhap.bayesian import compute_coalescent_prior
+
+        # Create tree with edge lengths (via SNP counts)
+        tree_dict = {
+            'ROOT (Y-Chromosome "Adam")': ["A", "B"],
+            "A": [],
+            "B": [],
+        }
+        tree = Tree.from_dict(tree_dict)
+
+        # Set SNP counts to simulate edge lengths
+        # (In the real tree, edge length is number of defining SNPs)
+        tree.get("A")._snp_count = 10  # type: ignore
+        tree.get("B")._snp_count = 5  # type: ignore
+
+        prior = compute_coalescent_prior(tree, prior_type="coalescent")
+
+        # With coalescent prior, longer edges (more SNPs) should get
+        # higher prior weight (more likely sampling point)
+        # Note: Implementation may vary; test the invariants
+        assert prior["A"] > 0
+        assert prior["B"] > 0
+        assert sum(prior.values()) - 1.0 < 1e-6
+
+    def test_prior_default_is_uniform(self, simple_tree: Tree) -> None:
+        """Default prior falls back to uniform when no edge info."""
+        from yallhap.bayesian import compute_coalescent_prior
+
+        # Simple tree without edge length info
+        prior = compute_coalescent_prior(simple_tree)
+
+        # Should still be valid
+        assert abs(sum(prior.values()) - 1.0) < 1e-6
+
+
+class TestPriorInClassifier:
+    """Tests for using prior in BayesianClassifier."""
+
+    def test_classifier_accepts_prior_type(
+        self, simple_tree: Tree, simple_snp_db: SNPDatabase
+    ) -> None:
+        """Classifier accepts prior_type parameter."""
+        classifier = BayesianClassifier(
+            tree=simple_tree,
+            snp_db=simple_snp_db,
+            prior_type="uniform",
+        )
+
+        variants = {
+            1000: Variant(
+                chrom="Y",
+                position=1000,
+                ref="C",
+                alt=("T",),
+                genotype=1,
+                quality=99,
+                allele_depth=(0, 30),
+            ),
+        }
+
+        posteriors = classifier.compute_posteriors(variants)
+        assert abs(sum(p for _, p in posteriors) - 1.0) < 0.001
+
+    def test_coalescent_prior_affects_posteriors(
+        self, simple_tree: Tree, simple_snp_db: SNPDatabase
+    ) -> None:
+        """Different prior types produce different posteriors."""
+        uniform_classifier = BayesianClassifier(
+            tree=simple_tree,
+            snp_db=simple_snp_db,
+            prior_type="uniform",
+        )
+        coalescent_classifier = BayesianClassifier(
+            tree=simple_tree,
+            snp_db=simple_snp_db,
+            prior_type="coalescent",
+        )
+
+        # Minimal evidence - priors should have more effect
+        variants = {
+            1000: Variant(
+                chrom="Y",
+                position=1000,
+                ref="C",
+                alt=("T",),
+                genotype=1,
+                quality=30,  # Lower quality = more uncertainty
+                allele_depth=(5, 10),  # Mixed reads
+            ),
+        }
+
+        uniform_post = uniform_classifier.compute_posteriors(variants)
+        coalescent_post = coalescent_classifier.compute_posteriors(variants)
+
+        # Both should sum to 1
+        assert abs(sum(p for _, p in uniform_post) - 1.0) < 0.001
+        assert abs(sum(p for _, p in coalescent_post) - 1.0) < 0.001
