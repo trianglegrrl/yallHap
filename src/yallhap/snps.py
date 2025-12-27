@@ -170,9 +170,9 @@ class SNPDatabase:
             row: CSV row as dict
             detected_reference: Reference genome detected from seqid column
         """
-        # Get alleles
-        ancestral = row.get("allele_anc", "").strip()
-        derived = row.get("allele_der", "").strip()
+        # Get alleles (handle None values from malformed CSV rows)
+        ancestral = (row.get("allele_anc") or "").strip()
+        derived = (row.get("allele_der") or "").strip()
 
         # Skip indels - alleles should be single nucleotides
         valid_alleles = {"A", "C", "G", "T"}
@@ -180,7 +180,7 @@ class SNPDatabase:
             return None
 
         # Get position (start column is 1-based position)
-        position_str = row.get("start", "").strip()
+        position_str = (row.get("start") or "").strip()
         if not position_str:
             return None
 
@@ -190,16 +190,16 @@ class SNPDatabase:
             return None
 
         # Get SNP name
-        name = row.get("Name", "").strip() or row.get("ID", "").strip()
+        name = (row.get("Name") or "").strip() or (row.get("ID") or "").strip()
         if not name:
             return None
 
         # Get haplogroup (prefer YCC_haplogroup)
-        haplogroup = row.get("YCC_haplogroup", "").strip()
+        haplogroup = (row.get("YCC_haplogroup") or "").strip()
 
         # Detect reference from seqid if not provided
         if detected_reference is None:
-            seqid = row.get("seqid", "").lower()
+            seqid = (row.get("seqid") or "").lower()
             if "hg19" in seqid or "grch37" in seqid:
                 detected_reference = "grch37"
             elif "hg38" in seqid or "grch38" in seqid:
