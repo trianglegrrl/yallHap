@@ -173,6 +173,80 @@ class TestTree:
         assert ancestor == 'ROOT (Y-Chromosome "Adam")'
 
 
+class TestTreeVersionInfo:
+    """Tests for tree version metadata."""
+
+    def test_version_info_from_json(self, tmp_path: Path, sample_tree_dict: dict) -> None:
+        """Test version_info property for tree loaded from JSON."""
+        json_path = tmp_path / "tree.json"
+        with open(json_path, "w") as f:
+            json.dump(sample_tree_dict, f)
+
+        tree = Tree.from_json(json_path)
+        info = tree.version_info
+
+        assert info["source"] == "YFull"
+        assert info["node_count"] == len(tree)
+        assert isinstance(info["snp_count"], int)
+        assert info["file_hash"] is not None
+        assert len(info["file_hash"]) == 8  # First 8 chars of SHA256
+
+    def test_version_info_from_dict(self, sample_tree_dict: dict) -> None:
+        """Test version_info for tree built from dict (no file hash)."""
+        tree = Tree.from_dict(sample_tree_dict)
+        info = tree.version_info
+
+        assert info["source"] == "YFull"
+        assert info["node_count"] == len(tree)
+        assert info["file_hash"] is None  # No file loaded
+
+    def test_version_string_with_hash(self, tmp_path: Path, sample_tree_dict: dict) -> None:
+        """Test version_string includes hash when loaded from file."""
+        json_path = tmp_path / "tree.json"
+        with open(json_path, "w") as f:
+            json.dump(sample_tree_dict, f)
+
+        tree = Tree.from_json(json_path)
+        version_str = tree.version_string
+
+        assert "YFull" in version_str
+        assert "SNPs" in version_str
+        assert "hash:" in version_str
+
+    def test_version_string_without_hash(self, sample_tree_dict: dict) -> None:
+        """Test version_string without hash when built from dict."""
+        tree = Tree.from_dict(sample_tree_dict)
+        version_str = tree.version_string
+
+        assert "YFull" in version_str
+        assert "SNPs" in version_str
+        assert "hash:" not in version_str
+
+    def test_hash_consistent(self, tmp_path: Path, sample_tree_dict: dict) -> None:
+        """Test hash is consistent for same content."""
+        json_path = tmp_path / "tree.json"
+        with open(json_path, "w") as f:
+            json.dump(sample_tree_dict, f)
+
+        tree1 = Tree.from_json(json_path)
+        tree2 = Tree.from_json(json_path)
+
+        assert tree1.version_info["file_hash"] == tree2.version_info["file_hash"]
+
+    def test_snp_count_accurate(self) -> None:
+        """Test SNP count is accurate for tree with known SNPs."""
+        # Create tree with nodes that have SNPs
+        tree = Tree()
+        tree._nodes = {
+            "A": Node(name="A", snps=["M91", "P97"]),
+            "B": Node(name="B", snps=["M168"]),
+            "C": Node(name="C", snps=[]),  # No SNPs
+        }
+        tree._root = tree._nodes["A"]
+
+        assert tree.snp_count == 3  # 2 + 1 + 0
+
+
 class TestTreeEdgeCases:
     """Edge case tests for Tree class."""
 

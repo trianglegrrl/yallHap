@@ -8,12 +8,13 @@ yallHap is validated against three primary datasets:
 
 | Dataset | Samples | Reference | Type | Same Major Lineage |
 |---------|---------|-----------|------|-------------------|
-| 1000 Genomes Phase 3 | 1,233 males | GRCh37 | Modern WGS | **99.76%** |
-| AADR v54 | 1,991 | GRCh37 | Ancient DNA | **88.65%** |
-| gnomAD HGDP/1000G | 10 | GRCh38 | High-coverage WGS | **100.00%** |
+| 1000 Genomes Phase 3 | 1,233 males | GRCh37 | Modern WGS | **99.76%** (95% CI: 99.24-99.96%) |
+| AADR v54 (stratified) | 1,497 | GRCh37 | Ancient DNA | **79.4%** (95% CI: 77.3-81.4%) |
+| gnomAD HGDP/1000G | 200 | GRCh38 | High-coverage WGS | **100.00%** (95% CI: 98.17-100%) |
 
 Notes:
-- AADR accuracy is measured on samples with properly formatted ground truth (X-YYYY haplogroup names)
+- AADR accuracy is stratified by coverage: <0.1× (38%), 0.1-0.5× (75%), 0.5-1× (97%), ≥1× (99%), unknown (88%)
+- AADR samples are limited to 300 per coverage bin for balanced analysis
 - gnomAD samples are selected from the overlap with 1000 Genomes Phase 3, balanced by superpopulation
 - Both heuristic and Bayesian modes produce identical results on all datasets
 
@@ -25,10 +26,10 @@ The following results were generated on 2025-12-26 using yallHap with 16 threads
 |---------|------|---------|-------------|-------|------------|------|
 | 1000G Phase 3 | yallHap | 1,233 | 99.76% | 8.84% | 0.994 | 15.4 |
 | 1000G Phase 3 | yallHap-Bayes | 1,233 | 99.76% | 8.84% | 0.994 | 15.4 |
-| AADR v54 | yallHap | 1,991 | 88.65% | 7.18% | 0.987 | 11.8 |
-| AADR v54 | yallHap-Bayes | 1,991 | 88.65% | 7.18% | 0.987 | 11.8 |
-| gnomAD HGDP/1KG | yallHap | 10 | 100.00% | 0.00% | 0.988 | 79.4 |
-| gnomAD HGDP/1KG | yallHap-Bayesian | 10 | 100.00% | 0.00% | 0.988 | 79.4 |
+| AADR v54 (stratified) | yallHap | 1,497 | 79.43% | 0.00% | 0.980 | 10.0 |
+| AADR v54 (stratified) | yallHap-Bayes | 1,497 | 79.43% | 0.00% | 0.980 | 10.0 |
+| gnomAD HGDP/1KG | yallHap | 200 | 100.00% | 6.50% | 0.991 | 26.7 |
+| gnomAD HGDP/1KG | yallHap-Bayesian | 200 | 100.00% | 6.50% | 0.991 | 26.7 |
 
 **Key Finding**: Heuristic and Bayesian modes produce identical classifications on all validation datasets.
 
@@ -195,16 +196,17 @@ EOF
 
 This validates yallHap against ancient samples from the Allen Ancient DNA Resource (AADR).
 
-**Important:** AADR ground truth uses mixed nomenclature - some samples have proper haplogroup names (e.g., "R-L21") while others have SNP-only names (e.g., "M458"). The benchmark script automatically filters to samples with proper X-YYYY format (1,991 of ~2,000 samples).
+**Important:** AADR ground truth uses mixed nomenclature - some samples have proper haplogroup names (e.g., "R-L21") while others have SNP-only names (e.g., "M458"). The benchmark script automatically filters to samples with proper X-YYYY format, then stratifies by coverage (300 samples per bin) for balanced analysis.
 
 ```bash
 python scripts/validate_ancient.py
 ```
 
-**Expected results:**
-- Same major lineage: 88.65% (1,991 samples)
-- Mean derived SNPs: 11.8 (low coverage typical for aDNA)
-- Mean confidence: 0.987
+**Expected results (stratified by coverage):**
+- Same major lineage: 79.4% weighted (1,497 samples, 300 per bin)
+- Coverage-stratified: <0.1× (38%), 0.1-0.5× (75%), 0.5-1× (97%), ≥1× (99%), unknown (88%)
+- Mean derived SNPs: 10.0 (low coverage typical for aDNA)
+- Mean confidence: 0.98
 
 ### gnomAD High-Coverage Validation
 
@@ -230,7 +232,7 @@ python scripts/download_gnomad_highcov.py --sample-only
 
 #### How gnomAD Samples Are Selected
 
-The benchmark script selects 10 samples (default, configurable via `--gnomad-samples N`) that:
+The benchmark script selects 200 samples (default, configurable via `--gnomad-samples N`) that:
 1. Exist in both gnomAD VCF AND 1000 Genomes Phase 3 ground truth
 2. Are balanced by superpopulation (AFR, AMR, EAS, EUR, SAS)
 
@@ -269,10 +271,10 @@ EOF
 ```
 
 **Expected results:**
-- Same major lineage: 100% (10 validation samples)
+- Same major lineage: 100% (200 validation samples, 95% CI: 98.17-100%)
 - All R haplogroups correctly identified as R-*
 - All I haplogroups correctly identified as I-*
-- High confidence (>0.98) with 60-100 derived SNPs per sample
+- High confidence (>0.99) with 20-30 derived SNPs per sample on average
 
 ## Understanding Results
 

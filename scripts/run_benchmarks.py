@@ -28,8 +28,11 @@ import json
 import random
 import sys
 import time
+from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
+
+import pandas as pd
 
 # Progress bar support (optional)
 try:
@@ -39,6 +42,55 @@ try:
 except ImportError:
     TQDM_AVAILABLE = False
     tqdm = None  # type: ignore
+
+
+# Coverage bin constants for stratified AADR analysis
+COVERAGE_BINS = ["<0.1x", "0.1-0.5x", "0.5-1x", ">=1x", "unknown"]
+
+
+def parse_coverage(cov_str: str) -> float | None:
+    """Parse coverage string to float."""
+    if pd.isna(cov_str) or str(cov_str) in ("..", "", "n/a", "nan"):
+        return None
+    try:
+        return float(cov_str)
+    except ValueError:
+        return None
+
+
+def get_coverage_bin(coverage: float | None) -> str:
+    """Assign coverage to bin."""
+    if coverage is None:
+        return "unknown"
+    elif coverage < 0.1:
+        return "<0.1x"
+    elif coverage < 0.5:
+        return "0.1-0.5x"
+    elif coverage < 1.0:
+        return "0.5-1x"
+    else:
+        return ">=1x"
+
+
+def load_coverage_map(anno_path: Path) -> dict[str, float | None]:
+    """Load sample ID -> coverage mapping from AADR anno file."""
+    df = pd.read_csv(anno_path, sep="\t", low_memory=False)
+
+    coverage_map: dict[str, float | None] = {}
+    for _, row in df.iterrows():
+        sample_id = str(row.get("Genetic ID", ""))
+        cov_col = "1240k coverage (taken from original pulldown where possible)"
+        coverage = parse_coverage(str(row.get(cov_col, "")))
+
+        coverage_map[sample_id] = coverage
+
+        # Also map without suffix
+        if "." in sample_id:
+            base_id = sample_id.rsplit(".", 1)[0]
+            if base_id not in coverage_map:
+                coverage_map[base_id] = coverage
+
+    return coverage_map
 
 
 def run_with_progress(
@@ -118,6 +170,17 @@ def run_with_progress(
 
 
 @dataclass
+class StratifiedResult:
+    """Results for a single coverage bin."""
+
+    bin_name: str
+    accuracy: float
+    correct: int
+    total: int
+    samples_tested: int
+
+
+@dataclass
 class BenchmarkResult:
     """Results for a single tool/dataset combination."""
 
@@ -130,6 +193,7 @@ class BenchmarkResult:
     mean_confidence: float | None = None
     mean_derived_snps: float | None = None
     notes: list[str] = field(default_factory=list)
+    stratified: list[StratifiedResult] = field(default_factory=list)
 
     @property
     def major_lineage_rate(self) -> float:
@@ -371,23 +435,44 @@ def benchmark_1kg(
 
 
 def benchmark_aadr(
-    base_dir: Path, subsample: int | None = None, threads: int = 1
+    base_dir: Path,
+    samples_per_bin: int = 300,
+    threads: int = 1,
 ) -> tuple[BenchmarkResult | None, BenchmarkResult | None]:
-    """Run AADR ancient DNA benchmark with heuristic and Bayesian modes."""
+    """
+    Run AADR ancient DNA benchmark with stratified coverage analysis.
+
+    Samples are stratified by coverage into bins (<0.1x, 0.1-0.5x, 0.5-1x, >=1x, unknown)
+    with up to samples_per_bin samples per bin for balanced analysis.
+
+    Args:
+        base_dir: Project base directory
+        samples_per_bin: Maximum samples per coverage bin (default: 300)
+        threads: Parallel threads for classification
+
+    Returns:
+        Tuple of (heuristic_result, bayesian_result) with stratified results
+    """
     ancient_dir = base_dir / "data" / "ancient"
     data_dir = base_dir / "data"
     validation_dir = base_dir / "data" / "validation"
 
+    anno_path = ancient_dir / "v54.1.p1_HO_public.anno"
     ground_truth_path = ancient_dir / "aadr_1240k_ground_truth.tsv"
     vcf_path = ancient_dir / "aadr_chrY_v2.vcf.gz"
     tree_path = data_dir / "yfull_tree.json"
     snp_db_path = validation_dir / "ybrowse_snps_hg19.csv"
 
     # Check required files
-    for path in [ground_truth_path, vcf_path, tree_path, snp_db_path]:
+    for path in [anno_path, ground_truth_path, vcf_path, tree_path, snp_db_path]:
         if not path.exists():
             print(f"  SKIP: {path.name} not found")
             return None, None
+
+    # Load coverage map
+    print("  Loading coverage data...")
+    coverage_map = load_coverage_map(anno_path)
+    print(f"    {len(coverage_map)} samples with coverage info")
 
     # Load ground truth - filter to proper haplogroup format
     raw_ground_truth = load_ground_truth(ground_truth_path, "haplogroup_terminal")
@@ -404,65 +489,171 @@ def benchmark_aadr(
     vcf_samples = set(vcf.header.samples)
     vcf.close()
 
-    samples = [s for s in ground_truth.keys() if s in vcf_samples]
+    # Group samples by coverage bin
+    samples_by_bin: dict[str, list[str]] = defaultdict(list)
+    for sample_id in ground_truth:
+        if sample_id not in vcf_samples:
+            continue
 
-    # Subsample if requested, otherwise cap at 2000
-    max_samples = subsample if subsample else 2000
-    if len(samples) > max_samples:
-        random.seed(42)
-        samples = random.sample(samples, max_samples)
+        coverage = coverage_map.get(sample_id)
+        if coverage is None:
+            # Try base ID without suffix
+            base_id = sample_id.rsplit(".", 1)[0] if "." in sample_id else sample_id
+            coverage = coverage_map.get(base_id)
 
-    print(f"  Loaded {len(samples)} samples (filtered to X-YYYY format)")
+        bin_name = get_coverage_bin(coverage)
+        samples_by_bin[bin_name].append(sample_id)
 
-    # Run yallHap heuristic mode with transversions-only
-    heur_preds, heur_runtime, heur_conf, heur_derived = run_yallhap_classification(
-        vcf_path=vcf_path,
-        tree_path=tree_path,
-        snp_db_path=snp_db_path,
-        samples=samples,
+    print("  Samples by coverage bin:")
+    for bin_name in COVERAGE_BINS:
+        count = len(samples_by_bin.get(bin_name, []))
+        print(f"    {bin_name}: {count}")
+
+    # Load classifier resources
+    from yallhap.classifier import HaplogroupClassifier
+    from yallhap.snps import SNPDatabase
+    from yallhap.tree import Tree
+
+    tree = Tree.from_json(tree_path)
+    snp_db = SNPDatabase.from_ybrowse_gff_csv(snp_db_path)
+
+    # Create classifiers
+    heur_classifier = HaplogroupClassifier(
+        tree=tree,
+        snp_db=snp_db,
         reference="grch37",
-        bayesian=False,
         transversions_only=True,
-        threads=threads,
     )
-    heur_major, heur_exact, heur_total = compare_haplogroups(ground_truth, heur_preds)
+
+    bayes_classifier = HaplogroupClassifier(
+        tree=tree,
+        snp_db=snp_db,
+        reference="grch37",
+        transversions_only=True,
+        bayesian=True,
+        ancient_mode=True,
+    )
+
+    # Run stratified validation
+    heur_stratified: list[StratifiedResult] = []
+    bayes_stratified: list[StratifiedResult] = []
+    heur_total_correct = 0
+    heur_total_tested = 0
+    bayes_total_correct = 0
+    bayes_total_tested = 0
+    total_runtime = 0.0
+    all_confidences: list[float] = []
+    all_derived: list[int] = []
+
+    for bin_name in COVERAGE_BINS:
+        samples = samples_by_bin.get(bin_name, [])
+        if not samples:
+            continue
+
+        # Limit samples per bin
+        if len(samples) > samples_per_bin:
+            random.seed(42)
+            samples = random.sample(samples, samples_per_bin)
+
+        print(f"  {bin_name}: classifying {len(samples)} samples...")
+        start = time.time()
+
+        # Heuristic mode
+        heur_results = heur_classifier.classify_batch(vcf_path, samples, threads=threads)
+
+        heur_correct = 0
+        heur_bin_total = 0
+        for result in heur_results:
+            expected = ground_truth.get(result.sample, "")
+            called = result.haplogroup
+
+            expected_major = expected[0].upper() if expected else ""
+            called_major = called[0].upper() if called and called != "NA" else ""
+
+            if called and called != "NA":
+                heur_bin_total += 1
+                if expected_major == called_major:
+                    heur_correct += 1
+                if result.confidence is not None:
+                    all_confidences.append(result.confidence)
+                if result.snp_stats and result.snp_stats.derived > 0:
+                    all_derived.append(result.snp_stats.derived)
+
+        heur_accuracy = heur_correct / heur_bin_total if heur_bin_total > 0 else 0
+        heur_stratified.append(StratifiedResult(
+            bin_name=bin_name,
+            accuracy=heur_accuracy,
+            correct=heur_correct,
+            total=heur_bin_total,
+            samples_tested=len(samples),
+        ))
+        heur_total_correct += heur_correct
+        heur_total_tested += heur_bin_total
+
+        # Bayesian mode
+        bayes_results = bayes_classifier.classify_batch(vcf_path, samples, threads=threads)
+
+        bayes_correct = 0
+        bayes_bin_total = 0
+        for result in bayes_results:
+            expected = ground_truth.get(result.sample, "")
+            called = result.haplogroup
+
+            expected_major = expected[0].upper() if expected else ""
+            called_major = called[0].upper() if called and called != "NA" else ""
+
+            if called and called != "NA":
+                bayes_bin_total += 1
+                if expected_major == called_major:
+                    bayes_correct += 1
+
+        bayes_accuracy = bayes_correct / bayes_bin_total if bayes_bin_total > 0 else 0
+        bayes_stratified.append(StratifiedResult(
+            bin_name=bin_name,
+            accuracy=bayes_accuracy,
+            correct=bayes_correct,
+            total=bayes_bin_total,
+            samples_tested=len(samples),
+        ))
+        bayes_total_correct += bayes_correct
+        bayes_total_tested += bayes_bin_total
+
+        elapsed = time.time() - start
+        total_runtime += elapsed
+        print(f"    Accuracy: {heur_accuracy:.1%} ({heur_correct}/{heur_bin_total}) in {elapsed:.1f}s")
+
+    # Compute overall weighted accuracy
+    heur_overall = heur_total_correct / heur_total_tested if heur_total_tested > 0 else 0
+    bayes_overall = bayes_total_correct / bayes_total_tested if bayes_total_tested > 0 else 0
+    mean_conf = sum(all_confidences) / len(all_confidences) if all_confidences else 0.0
+    mean_derived = sum(all_derived) / len(all_derived) if all_derived else 0.0
+
+    print(f"  Overall: {heur_overall:.1%} ({heur_total_correct}/{heur_total_tested})")
 
     heuristic_result = BenchmarkResult(
         tool_name="yallHap",
-        dataset="AADR v54",
-        total_samples=heur_total,
-        same_major_lineage=heur_major,
-        exact_match=heur_exact,
-        runtime_seconds=heur_runtime,
-        mean_confidence=heur_conf,
-        mean_derived_snps=heur_derived,
-        notes=["GRCh37 reference", "Transversions-only mode", "Ancient DNA"],
+        dataset="AADR v54 (stratified)",
+        total_samples=heur_total_tested,
+        same_major_lineage=heur_total_correct,
+        exact_match=0,  # Not computed for stratified
+        runtime_seconds=total_runtime,
+        mean_confidence=mean_conf,
+        mean_derived_snps=mean_derived,
+        notes=["GRCh37 reference", "Transversions-only", "Stratified by coverage"],
+        stratified=heur_stratified,
     )
-
-    # Run yallHap Bayesian mode with transversions-only and ancient flag
-    bayes_preds, bayes_runtime, bayes_conf, bayes_derived = run_yallhap_classification(
-        vcf_path=vcf_path,
-        tree_path=tree_path,
-        snp_db_path=snp_db_path,
-        samples=samples,
-        reference="grch37",
-        bayesian=True,
-        transversions_only=True,
-        ancient_mode=True,
-        threads=threads,
-    )
-    bayes_major, bayes_exact, bayes_total = compare_haplogroups(ground_truth, bayes_preds)
 
     bayesian_result = BenchmarkResult(
         tool_name="yallHap-Bayes",
-        dataset="AADR v54",
-        total_samples=bayes_total,
-        same_major_lineage=bayes_major,
-        exact_match=bayes_exact,
-        runtime_seconds=bayes_runtime,
-        mean_confidence=bayes_conf,
-        mean_derived_snps=bayes_derived,
-        notes=["GRCh37 reference", "Bayesian + transversions-only", "Ancient DNA"],
+        dataset="AADR v54 (stratified)",
+        total_samples=bayes_total_tested,
+        same_major_lineage=bayes_total_correct,
+        exact_match=0,
+        runtime_seconds=total_runtime,
+        mean_confidence=mean_conf,
+        mean_derived_snps=mean_derived,
+        notes=["GRCh37 reference", "Bayesian + transversions-only", "Stratified by coverage"],
+        stratified=bayes_stratified,
     )
 
     return heuristic_result, bayesian_result
@@ -535,11 +726,14 @@ def benchmark_gnomad_highcov(
     # Create or reuse subset VCF with exactly the samples we need
     import subprocess
 
-    # Create subset VCF: extract samples AND filter to diagnostic positions
-    # Use -T (targets) instead of -R (regions) - streams instead of seeking
+    # Prefer the comprehensive diagnostic VCF if available (all shared samples, filtered)
+    comprehensive_vcf = highcov_dir / "vcf" / "gnomad_1kg_shared_diagnostic.vcf.gz"
     subset_vcf_path = highcov_dir / "vcf" / f"gnomad_subset_{len(samples)}_filtered.vcf.gz"
 
-    if subset_vcf_path.exists():
+    if comprehensive_vcf.exists():
+        vcf_path = comprehensive_vcf
+        print(f"  Using pre-extracted diagnostic VCF: {comprehensive_vcf.name}")
+    elif subset_vcf_path.exists():
         vcf_path = subset_vcf_path
         print(f"  Using cached subset: {subset_vcf_path.name}")
     else:
@@ -818,13 +1012,13 @@ def save_results(base_dir: Path, results: list[BenchmarkResult]) -> None:
 
     # JSON output
     json_path = paper_dir / "benchmark_results.json"
-    json_data = {
+    json_data: dict = {
         "generated": time.strftime("%Y-%m-%d %H:%M:%S"),
         "results": [],
     }
 
     for r in results:
-        json_data["results"].append({
+        result_dict: dict = {
             "dataset": r.dataset,
             "tool": r.tool_name,
             "total_samples": r.total_samples,
@@ -836,7 +1030,22 @@ def save_results(base_dir: Path, results: list[BenchmarkResult]) -> None:
             "mean_confidence": round(r.mean_confidence, 3) if r.mean_confidence else None,
             "mean_derived_snps": round(r.mean_derived_snps, 1) if r.mean_derived_snps else None,
             "notes": r.notes,
-        })
+        }
+
+        # Add stratified results if present
+        if r.stratified:
+            result_dict["stratified"] = [
+                {
+                    "bin": s.bin_name,
+                    "accuracy_pct": round(s.accuracy * 100, 1),
+                    "correct": s.correct,
+                    "total": s.total,
+                    "samples_tested": s.samples_tested,
+                }
+                for s in r.stratified
+            ]
+
+        json_data["results"].append(result_dict)
 
     with open(json_path, "w") as f:
         json.dump(json_data, f, indent=2)
@@ -893,6 +1102,28 @@ Examples:
         default=10,
         metavar="N",
         help="Number of gnomAD high-coverage samples, balanced by superpopulation (default: 10)",
+    )
+    parser.add_argument(
+        "--aadr-samples-per-bin",
+        type=int,
+        default=300,
+        metavar="N",
+        help="Max samples per coverage bin for AADR stratified analysis (default: 300)",
+    )
+    parser.add_argument(
+        "--skip-1kg",
+        action="store_true",
+        help="Skip 1000 Genomes Phase 3 benchmark",
+    )
+    parser.add_argument(
+        "--skip-aadr",
+        action="store_true",
+        help="Skip AADR ancient DNA benchmark",
+    )
+    parser.add_argument(
+        "--skip-gnomad",
+        action="store_true",
+        help="Skip gnomAD high-coverage benchmark",
     )
     return parser.parse_args()
 
@@ -1009,53 +1240,69 @@ def main() -> int:
         print(f"  gnomAD (shared with 1KG): {len(gnomad_samples)} samples, balanced by superpopulation")
 
     # 1. 1000 Genomes Phase 3 (GRCh37)
-    print("\n[1/3] 1000 Genomes Phase 3 (GRCh37)...")
-    step_start = time.time()
-    heur_result, bayes_result = benchmark_1kg(
-        base_dir,
-        subsample=args.subsample,
-        threads=args.threads,
-        shared_samples=kg_samples if kg_samples else None,
-    )
-    step_time = time.time() - step_start
-    if heur_result:
-        results.append(heur_result)
-        print(f"  ✓ Heuristic: {heur_result.major_lineage_rate:.2f}% major lineage accuracy")
-    if bayes_result:
-        results.append(bayes_result)
-        print(f"  ✓ Bayesian: {bayes_result.major_lineage_rate:.2f}% major lineage accuracy")
-    print(f"  ⏱ Step time: {step_time:.1f}s")
+    if args.skip_1kg:
+        print("\n[1/3] 1000 Genomes Phase 3 (GRCh37)... SKIPPED")
+    else:
+        print("\n[1/3] 1000 Genomes Phase 3 (GRCh37)...")
+        step_start = time.time()
+        heur_result, bayes_result = benchmark_1kg(
+            base_dir,
+            subsample=args.subsample,
+            threads=args.threads,
+            shared_samples=kg_samples if kg_samples else None,
+        )
+        step_time = time.time() - step_start
+        if heur_result:
+            results.append(heur_result)
+            print(f"  + Heuristic: {heur_result.major_lineage_rate:.2f}% major lineage accuracy")
+        if bayes_result:
+            results.append(bayes_result)
+            print(f"  + Bayesian: {bayes_result.major_lineage_rate:.2f}% major lineage accuracy")
+        print(f"  Time: {step_time:.1f}s")
 
-    # 2. AADR Ancient DNA (separate dataset, no overlap expected)
-    print("\n[2/3] AADR Ancient DNA (transversions-only)...")
-    step_start = time.time()
-    heur_result, bayes_result = benchmark_aadr(base_dir, subsample=args.subsample, threads=args.threads)
-    step_time = time.time() - step_start
-    if heur_result:
-        results.append(heur_result)
-        print(f"  ✓ Heuristic: {heur_result.major_lineage_rate:.2f}% major lineage accuracy")
-    if bayes_result:
-        results.append(bayes_result)
-        print(f"  ✓ Bayesian: {bayes_result.major_lineage_rate:.2f}% major lineage accuracy")
-    print(f"  ⏱ Step time: {step_time:.1f}s")
+    # 2. AADR Ancient DNA (stratified by coverage)
+    if args.skip_aadr:
+        print("\n[2/3] AADR Ancient DNA (stratified by coverage)... SKIPPED")
+    else:
+        print("\n[2/3] AADR Ancient DNA (stratified by coverage)...")
+        step_start = time.time()
+        heur_result, bayes_result = benchmark_aadr(
+            base_dir,
+            samples_per_bin=args.aadr_samples_per_bin,
+            threads=args.threads,
+        )
+        step_time = time.time() - step_start
+        if heur_result:
+            results.append(heur_result)
+            print(f"  + Heuristic: {heur_result.major_lineage_rate:.2f}% major lineage accuracy (weighted)")
+            if heur_result.stratified:
+                for s in heur_result.stratified:
+                    print(f"      {s.bin_name}: {s.accuracy*100:.1f}% ({s.correct}/{s.total})")
+        if bayes_result:
+            results.append(bayes_result)
+            print(f"  + Bayesian: {bayes_result.major_lineage_rate:.2f}% major lineage accuracy (weighted)")
+        print(f"  Time: {step_time:.1f}s")
 
     # 3. gnomAD High-Coverage (GRCh38) - use balanced superpopulation samples
-    print("\n[3/3] gnomAD HGDP/1000G High-Coverage (GRCh38)...")
-    step_start = time.time()
-    heur_result, bayes_result = benchmark_gnomad_highcov(
-        base_dir,
-        subsample=None,  # Don't subsample further, use gnomad_samples list
-        threads=args.threads,
-        shared_samples=gnomad_samples if gnomad_samples else None,
-    )
-    step_time = time.time() - step_start
-    if heur_result:
-        results.append(heur_result)
-        print(f"  ✓ Heuristic: {heur_result.major_lineage_rate:.2f}% major lineage accuracy")
-    if bayes_result:
-        results.append(bayes_result)
-        print(f"  ✓ Bayesian: {bayes_result.major_lineage_rate:.2f}% major lineage accuracy")
-    print(f"  ⏱ Step time: {step_time:.1f}s")
+    if args.skip_gnomad:
+        print("\n[3/3] gnomAD HGDP/1000G High-Coverage (GRCh38)... SKIPPED")
+    else:
+        print("\n[3/3] gnomAD HGDP/1000G High-Coverage (GRCh38)...")
+        step_start = time.time()
+        heur_result, bayes_result = benchmark_gnomad_highcov(
+            base_dir,
+            subsample=None,  # Don't subsample further, use gnomad_samples list
+            threads=args.threads,
+            shared_samples=gnomad_samples if gnomad_samples else None,
+        )
+        step_time = time.time() - step_start
+        if heur_result:
+            results.append(heur_result)
+            print(f"  + Heuristic: {heur_result.major_lineage_rate:.2f}% major lineage accuracy")
+        if bayes_result:
+            results.append(bayes_result)
+            print(f"  + Bayesian: {bayes_result.major_lineage_rate:.2f}% major lineage accuracy")
+        print(f"  Time: {step_time:.1f}s")
 
 
     if not results:
