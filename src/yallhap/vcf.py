@@ -234,9 +234,14 @@ class VCFReader:
         # Extract quality
         quality = sample_data.get("GQ")
 
-        # Extract allele depths
+        # Extract allele depths (handle scalar or tuple)
         ad = sample_data.get("AD")
-        allele_depth = tuple(ad) if ad else None
+        if ad is None:
+            allele_depth = None
+        elif isinstance(ad, int):
+            allele_depth = (ad,)
+        else:
+            allele_depth = tuple(ad)
 
         return Variant(
             chrom="Y",  # Normalize
