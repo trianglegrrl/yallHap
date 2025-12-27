@@ -180,6 +180,28 @@ def main() -> None:
     help="Ancient DNA damage rate for Bayesian mode [default: 0.1]",
 )
 @click.option(
+    "--estimate-contamination",
+    is_flag=True,
+    help="Estimate Y-chromosome contamination from allele depths",
+)
+@click.option(
+    "--max-tolerance",
+    type=int,
+    default=3,
+    help="Maximum ancestral calls before stopping traversal in ancient mode [default: 3]",
+)
+@click.option(
+    "--isogg",
+    is_flag=True,
+    help="Include ISOGG haplogroup name in output",
+)
+@click.option(
+    "--isogg-db",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    help="Path to ISOGG SNP database file (pathPhynder format)",
+)
+@click.option(
     "--output",
     "-o",
     type=click.Path(path_type=Path),
@@ -207,6 +229,10 @@ def classify(
     bayesian: bool,
     error_rate: float,
     damage_rate: float,
+    estimate_contamination: bool,
+    max_tolerance: int,
+    isogg: bool,
+    isogg_db: Path | None,
     output: Path | None,
     output_format: str,
 ) -> None:
@@ -243,17 +269,69 @@ def classify(
             damage_rate=damage_rate,
         )
 
+        # Load ISOGG database if requested
+        isogg_mapper = None
+        if isogg:
+            from yallhap.isogg import ISOGGDatabase, ISOGGMapper
+
+            if isogg_db:
+                click.echo(f"Loading ISOGG database from {isogg_db}...", err=True)
+                isogg_db_obj = ISOGGDatabase.from_file(isogg_db)
+            else:
+                # Try default location
+                default_isogg = Path("data/isogg_snps_grch38.txt")
+                if default_isogg.exists():
+                    click.echo(f"Loading ISOGG database from {default_isogg}...", err=True)
+                    isogg_db_obj = ISOGGDatabase.from_file(default_isogg)
+                else:
+                    click.echo(
+                        "Warning: --isogg requested but no ISOGG database found. "
+                        "Use --isogg-db to specify path.",
+                        err=True,
+                    )
+                    isogg_db_obj = None
+
+            if isogg_db_obj:
+                isogg_mapper = ISOGGMapper(tree_obj, isogg_db_obj)
+
         # Run classification
         click.echo(f"Classifying {vcf}...", err=True)
         result = classifier.classify(vcf, sample)
 
+        # Estimate contamination if requested
+        contamination_result = None
+        if estimate_contamination:
+            from yallhap.contamination import ContaminationResult, estimate_contamination_with_snpdb
+
+            # Get variants from classifier
+            variants = classifier._get_variants(vcf, sample)  # type: ignore
+            rate, n_sites = estimate_contamination_with_snpdb(
+                variants, snp_db_obj, reference=reference, min_depth=min_depth  # type: ignore
+            )
+            contamination_result = ContaminationResult(rate=rate, n_sites=n_sites)
+            click.echo(f"Contamination estimate: {rate:.1%} ({n_sites} sites)", err=True)
+
+        # Add ISOGG haplogroup if available
+        isogg_haplogroup = None
+        if isogg_mapper and result.haplogroup != "NA":
+            isogg_haplogroup = isogg_mapper.to_isogg(result.haplogroup)
+
+        # Store extra results in result dict for output
+        # (These will be included when writing result)
+        extra_data = {
+            "isogg_haplogroup": isogg_haplogroup,
+            "contamination_rate": contamination_result.rate if contamination_result else None,
+            "contamination_sites": contamination_result.n_sites if contamination_result else None,
+            "max_tolerance": max_tolerance,
+        }
+
         # Output result
         if output:
             with open(output, "w") as f:
-                _write_result(result, f, output_format)
+                _write_result(result, f, output_format, extra_data)
             click.echo(f"Result written to {output}", err=True)
         else:
-            _write_result(result, sys.stdout, output_format)
+            _write_result(result, sys.stdout, output_format, extra_data)
 
         # Exit with appropriate code
         if result.haplogroup == "NA":
@@ -321,10 +399,21 @@ def _prepare_t2t_database(snp_db: SNPDatabase) -> SNPDatabase:
     return snp_db
 
 
-def _write_result(result: HaplogroupCall, file: TextIO, format: str) -> None:
+def _write_result(
+    result: HaplogroupCall,
+    file: TextIO,
+    format: str,
+    extra_data: dict[str, Any] | None = None,
+) -> None:
     """Write classification result to file."""
     if format == "json":
-        json.dump(result.to_dict(), file, indent=2)
+        output_dict = result.to_dict()
+        # Add extra data if provided
+        if extra_data:
+            for key, value in extra_data.items():
+                if value is not None:
+                    output_dict[key] = value
+        json.dump(output_dict, file, indent=2)
         file.write("\n")
     elif format == "tsv":
         # Header - include Bayesian fields if present
@@ -363,10 +452,12 @@ def _write_result(result: HaplogroupCall, file: TextIO, format: str) -> None:
 
         # Add Bayesian values if present
         if result.posterior is not None:
-            row.extend([
-                f"{result.posterior:.4f}",
-                ";".join(result.credible_set_95),
-            ])
+            row.extend(
+                [
+                    f"{result.posterior:.4f}",
+                    ";".join(result.credible_set_95),
+                ]
+            )
 
         file.write("\t".join(row) + "\n")
 
@@ -517,9 +608,7 @@ def batch(
                 initargs=(tree, snp_db, classifier_config),
             ) as executor:
                 # Submit all tasks
-                future_to_vcf = {
-                    executor.submit(_classify_file, vcf): vcf for vcf in vcf_files
-                }
+                future_to_vcf = {executor.submit(_classify_file, vcf): vcf for vcf in vcf_files}
 
                 # Collect results as they complete
                 for future in as_completed(future_to_vcf):

@@ -17,6 +17,99 @@ from yallhap.tree import Tree
 from yallhap.vcf import Variant, VCFReader
 
 
+def traverse_with_tolerance(
+    tree: Tree,
+    haplogroup_scores: dict[str, dict[str, int]],
+    max_tolerance: int = 3,
+) -> tuple[str, list[str], dict[str, int]]:
+    """
+    Traverse tree paths with tolerance stopping.
+
+    Based on pathPhynder's traversePaths algorithm. Walks all paths from root
+    to leaves, stopping when ancestral (conflicting) calls exceed tolerance.
+    Returns the deepest haplogroup with the most derived support.
+
+    Args:
+        tree: Y-chromosome phylogenetic tree
+        haplogroup_scores: Dict of haplogroup -> {"derived": n, "ancestral": n, "missing": n}
+        max_tolerance: Maximum ancestral calls before stopping traversal
+
+    Returns:
+        Tuple of (best_haplogroup, path, stats)
+        where stats = {"total_derived": n, "total_ancestral": n, "stopped_at": hg}
+    """
+    root = tree.root
+
+    # If no scores, return root
+    if not haplogroup_scores:
+        return root.name, [], {"total_derived": 0, "total_ancestral": 0}
+
+    # Build all paths from root to leaves
+    all_paths = _build_all_paths(tree)
+
+    # Score each path
+    best_path: list[str] = []
+    best_hg = root.name
+    best_derived = 0
+    best_stats: dict[str, int] = {"total_derived": 0, "total_ancestral": 0}
+
+    for path in all_paths:
+        # Traverse this path with tolerance
+        traversed_path: list[str] = []
+        total_derived = 0
+        total_ancestral = 0
+
+        for node_name in path:
+            if node_name == root.name:
+                continue  # Skip root
+
+            scores = haplogroup_scores.get(node_name, {})
+            derived = scores.get("derived", 0)
+            ancestral = scores.get("ancestral", 0)
+
+            # Check if ancestral exceeds tolerance
+            if ancestral > max_tolerance:
+                break
+
+            # Add to traversed path
+            traversed_path.append(node_name)
+            total_derived += derived
+            total_ancestral += ancestral
+
+        # Compare to best path
+        # Prefer paths with more derived calls
+        if total_derived > best_derived:
+            best_derived = total_derived
+            best_path = traversed_path
+            best_hg = traversed_path[-1] if traversed_path else root.name
+            best_stats = {
+                "total_derived": total_derived,
+                "total_ancestral": total_ancestral,
+            }
+
+    return best_hg, best_path, best_stats
+
+
+def _build_all_paths(tree: Tree) -> list[list[str]]:
+    """Build all paths from root to leaves."""
+    root = tree.root
+    paths: list[list[str]] = []
+
+    def _dfs(node_name: str, current_path: list[str]) -> None:
+        current_path = current_path + [node_name]
+        node = tree.get(node_name)
+
+        if not node.children_names:
+            # Leaf node - save path
+            paths.append(current_path)
+        else:
+            for child_name in node.children_names:
+                _dfs(child_name, current_path)
+
+    _dfs(root.name, [])
+    return paths
+
+
 @dataclass
 class SNPStats:
     """Statistics about SNP calls used in classification."""
@@ -472,9 +565,7 @@ class HaplogroupClassifier:
 
         # Get best haplogroup and credible set
         best_hg, best_prob = posteriors[0]
-        credible_set = self._bayesian_classifier.get_credible_set(
-            posteriors, threshold=0.95
-        )
+        credible_set = self._bayesian_classifier.get_credible_set(posteriors, threshold=0.95)
 
         # Build path
         path = self.tree.path_from_root(best_hg) if best_hg in self.tree else []
@@ -540,9 +631,7 @@ class HaplogroupClassifier:
             log_likelihood=None,  # Could add if needed
         )
 
-    def _read_variants(
-        self, vcf_path: Path | str, sample: str | None
-    ) -> dict[int, Variant]:
+    def _read_variants(self, vcf_path: Path | str, sample: str | None) -> dict[int, Variant]:
         """Read Y-chromosome variants, indexed by position."""
         variants: dict[int, Variant] = {}
 
@@ -560,9 +649,7 @@ class HaplogroupClassifier:
 
         return variants
 
-    def _score_haplogroups(
-        self, variants: dict[int, Variant]
-    ) -> dict[str, dict[str, int]]:
+    def _score_haplogroups(self, variants: dict[int, Variant]) -> dict[str, dict[str, int]]:
         """
         Score each haplogroup based on observed variants.
 
@@ -599,9 +686,7 @@ class HaplogroupClassifier:
                     continue
 
                 # Transversions-only mode: skip all transitions
-                if self.transversions_only and not is_transversion(
-                    snp.ancestral, snp.derived
-                ):
+                if self.transversions_only and not is_transversion(snp.ancestral, snp.derived):
                     scores[node_name]["missing"] += 1
                     continue
 
@@ -635,9 +720,7 @@ class HaplogroupClassifier:
     def _is_damage_like(self, snp: SNP, called: str) -> bool:
         """Check if variant looks like ancient DNA damage."""
         # C>T damage (on reference strand) or G>A (reverse complement)
-        return (snp.ancestral == "C" and called == "T") or (
-            snp.ancestral == "G" and called == "A"
-        )
+        return (snp.ancestral == "C" and called == "T") or (snp.ancestral == "G" and called == "A")
 
     def _find_best_haplogroup(
         self,
@@ -679,9 +762,7 @@ class HaplogroupClassifier:
             qc1 = self._calculate_backbone_score(hg, haplogroup_scores)
 
             # Combined confidence (geometric mean)
-            confidence = (
-                (qc1 * qc2 * qc3) ** (1 / 3) if qc1 > 0 and qc2 > 0 and qc3 > 0 else 0
-            )
+            confidence = (qc1 * qc2 * qc3) ** (1 / 3) if qc1 > 0 and qc2 > 0 and qc3 > 0 else 0
 
             if confidence > 0:
                 qc = QCScores(
@@ -711,9 +792,7 @@ class HaplogroupClassifier:
         # Filter: Balance backbone score (path consistency) with evidence
         # Try progressively looser thresholds until we find good candidates
 
-        def filter_candidates(
-            cands: list, min_backbone: float, min_derived: int
-        ) -> list:
+        def filter_candidates(cands: list, min_backbone: float, min_derived: int) -> list:
             return [
                 c
                 for c in cands
@@ -742,10 +821,7 @@ class HaplogroupClassifier:
             path = list(self.tree.path_to_root(hg))
             support = 0
             for ancestor in path[1:]:  # Skip the haplogroup itself
-                if (
-                    ancestor in haplogroup_scores
-                    and haplogroup_scores[ancestor]["derived"] >= 3
-                ):
+                if ancestor in haplogroup_scores and haplogroup_scores[ancestor]["derived"] >= 3:
                     support += 1
             return support
 
@@ -763,9 +839,7 @@ class HaplogroupClassifier:
         best_hg, best_confidence, best_qc, best_stats = selected[0]
         return best_hg, best_confidence, best_qc, best_stats
 
-    def _calculate_path_score(
-        self, haplogroup: str, scores: dict[str, dict[str, int]]
-    ) -> float:
+    def _calculate_path_score(self, haplogroup: str, scores: dict[str, dict[str, int]]) -> float:
         """Calculate QC3: within-haplogroup path consistency."""
         path = self.tree.path_to_root(haplogroup)
         if len(path) <= 1:
