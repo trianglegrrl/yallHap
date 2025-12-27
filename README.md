@@ -98,7 +98,7 @@ yallhap classify sample.vcf.gz \
     --reference grch38 \
     --output result.json
 
-# For GRCh37/hg19 VCFs  
+# For GRCh37/hg19 VCFs
 yallhap classify sample.vcf.gz \
     --tree data/yfull_tree.json \
     --snp-db data/ybrowse_snps_grch37.csv \
