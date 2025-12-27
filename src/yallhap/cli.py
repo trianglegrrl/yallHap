@@ -93,7 +93,7 @@ def _classify_file(vcf_path: Path) -> HaplogroupCall:
     return _worker_classifier.classify(vcf_path)
 
 
-@click.group()
+@click.group(context_settings={"help_option_names": ["-h", "--help"]})
 @click.version_option(version=__version__, prog_name="yallhap")
 def main() -> None:
     """
