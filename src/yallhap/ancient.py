@@ -9,7 +9,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
+
+if TYPE_CHECKING:
+    from yallhap.vcf import Variant
 
 
 class MutationType(Enum):
@@ -161,8 +164,8 @@ class DamageFilter:
 
     def filter_variants(
         self,
-        variants: dict[int, "Variant"],  # Forward reference to avoid circular import
-    ) -> tuple[dict[int, "Variant"], int]:
+        variants: dict[int, Variant],  # Forward reference to avoid circular import
+    ) -> tuple[dict[int, Variant], int]:
         """
         Filter variants that look like damage.
 
@@ -172,7 +175,7 @@ class DamageFilter:
         Returns:
             Tuple of (filtered variants dict, number filtered)
         """
-        filtered: dict[int, "Variant"] = {}
+        filtered: dict[int, Variant] = {}
         count_filtered = 0
 
         for pos, variant in variants.items():
@@ -199,8 +202,8 @@ class TransversionOnlyFilter:
 
     def filter_variants(
         self,
-        variants: dict[int, "Variant"],
-    ) -> tuple[dict[int, "Variant"], int]:
+        variants: dict[int, Variant],
+    ) -> tuple[dict[int, Variant], int]:
         """
         Filter variants to only keep transversions.
 
@@ -210,7 +213,7 @@ class TransversionOnlyFilter:
         Returns:
             Tuple of (filtered variants dict, number filtered)
         """
-        filtered: dict[int, "Variant"] = {}
+        filtered: dict[int, Variant] = {}
         count_filtered = 0
 
         for pos, variant in variants.items():

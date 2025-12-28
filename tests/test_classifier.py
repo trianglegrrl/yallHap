@@ -340,7 +340,6 @@ Y	2656183	M343	G	A	.	PASS	.	GT	1/1
     def tree_json(self, tmp_path, sample_tree_dict: dict) -> str:
         """Create tree JSON file for CLI tests."""
         import json
-        from pathlib import Path
 
         tree_path = tmp_path / "tree.json"
         with open(tree_path, "w") as f:

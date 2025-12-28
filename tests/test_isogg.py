@@ -158,6 +158,92 @@ class TestISOGGMapper:
         assert len(haplogroups) >= 1
         assert "R1b1a1b1a1a2c1a1d5a" in haplogroups
 
+    def test_direct_snp_lookup_priority(self, sample_isogg_file: Path) -> None:
+        """Direct SNP name lookup takes priority over tree traversal."""
+        from yallhap.isogg import ISOGGDatabase, ISOGGMapper
+        from yallhap.tree import Tree
+
+        # A100 maps to R1b1a1b1a1a2c1a1d5a in sample ISOGG file
+        tree_dict = {
+            'ROOT (Y-Chromosome "Adam")': ["R"],
+            "R": ["R-A100"],  # SNP A100 in the haplogroup name
+        }
+        tree = Tree.from_dict(tree_dict)
+
+        db = ISOGGDatabase.from_file(sample_isogg_file)
+        mapper = ISOGGMapper(tree, db)
+
+        # R-A100 should map to R1b1a1b1a1a2c1a1d5a via direct SNP lookup
+        result = mapper.to_isogg("R-A100")
+        assert result == "R1b1a1b1a1a2c1a1d5a"
+
+    def test_to_isogg_from_snps_finds_most_specific(
+        self, sample_isogg_file: Path
+    ) -> None:
+        """to_isogg_from_snps finds the most specific haplogroup from SNP list."""
+        from yallhap.isogg import ISOGGDatabase, ISOGGMapper
+        from yallhap.tree import Tree
+
+        tree_dict = {'ROOT (Y-Chromosome "Adam")': []}
+        tree = Tree.from_dict(tree_dict)
+
+        db = ISOGGDatabase.from_file(sample_isogg_file)
+        mapper = ISOGGMapper(tree, db)
+
+        # A100 -> R1b1a1b1a1a2c1a1d5a (very specific)
+        # This should prefer the more specific haplogroup
+        result = mapper.to_isogg_from_snps(["A100"])
+        assert result is not None
+        assert result == "R1b1a1b1a1a2c1a1d5a"
+
+    def test_to_isogg_from_snps_empty_list(self, sample_isogg_file: Path) -> None:
+        """to_isogg_from_snps returns None for empty SNP list."""
+        from yallhap.isogg import ISOGGDatabase, ISOGGMapper
+        from yallhap.tree import Tree
+
+        tree_dict = {'ROOT (Y-Chromosome "Adam")': []}
+        tree = Tree.from_dict(tree_dict)
+
+        db = ISOGGDatabase.from_file(sample_isogg_file)
+        mapper = ISOGGMapper(tree, db)
+
+        result = mapper.to_isogg_from_snps([])
+        assert result is None
+
+    def test_to_isogg_from_snps_unknown_snps(self, sample_isogg_file: Path) -> None:
+        """to_isogg_from_snps returns None for unknown SNPs."""
+        from yallhap.isogg import ISOGGDatabase, ISOGGMapper
+        from yallhap.tree import Tree
+
+        tree_dict = {'ROOT (Y-Chromosome "Adam")': []}
+        tree = Tree.from_dict(tree_dict)
+
+        db = ISOGGDatabase.from_file(sample_isogg_file)
+        mapper = ISOGGMapper(tree, db)
+
+        result = mapper.to_isogg_from_snps(["FAKE_SNP_123", "UNKNOWN_456"])
+        assert result is None
+
+    def test_base_haplogroup_fallback(self, sample_isogg_file: Path) -> None:
+        """Falls back to base haplogroup letter if in ISOGG database."""
+        from yallhap.isogg import ISOGGDatabase, ISOGGMapper
+        from yallhap.tree import Tree
+
+        tree_dict = {
+            'ROOT (Y-Chromosome "Adam")': ["I2"],
+            "I2": [],
+        }
+        tree = Tree.from_dict(tree_dict)
+
+        db = ISOGGDatabase.from_file(sample_isogg_file)
+        mapper = ISOGGMapper(tree, db)
+
+        # I2 is in the ISOGG database as a haplogroup name
+        result = mapper.to_isogg("I2")
+        # Should return I2 or a more specific I2 haplogroup
+        assert result is not None
+        assert "I2" in result or result.startswith("I2")
+
 
 class TestISOGGHaplogroups:
     """Tests for ISOGG haplogroup list."""

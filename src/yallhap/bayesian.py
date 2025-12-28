@@ -112,11 +112,18 @@ def compute_branch_likelihood(
     reference: ReferenceGenome = "grch38",
 ) -> BranchLikelihood:
     """
-    Compute log-likelihood for a single branch.
+    Compute log-likelihood RATIO for a single branch.
 
-    A branch is the edge leading to a haplogroup node. The likelihood
-    is based on how well the observed variants match the expected
-    derived alleles for SNPs defining this branch.
+    Uses a Bayes factor approach comparing:
+    - P(data | descended through this branch) vs
+    - P(data | NOT descended through this branch)
+
+    The log-likelihood ratio:
+    - Derived match: log((1-e)/e) ≈ +7 (strong support for being on branch)
+    - Ancestral mismatch: log(e/(1-e)) ≈ -7 (strong evidence against)
+
+    This ensures that derived matches ADD positive evidence,
+    allowing deep haplogroups to outscore shallow ones.
 
     Args:
         branch_id: Haplogroup name
@@ -128,7 +135,7 @@ def compute_branch_likelihood(
         reference: Reference genome for position lookup
 
     Returns:
-        BranchLikelihood with log-likelihood and counts
+        BranchLikelihood with log-likelihood ratio and counts
     """
     if not snps:
         # No SNPs for this branch = neutral contribution
@@ -143,6 +150,21 @@ def compute_branch_likelihood(
     derived_count = 0
     ancestral_count = 0
 
+    # For ancient samples, use higher error rate to account for damage
+    effective_error_rate = error_rate
+    if is_ancient:
+        # Ancient samples have higher error rate due to damage
+        # Be more lenient with mismatches
+        effective_error_rate = max(error_rate, 0.05)
+
+    # Precompute log-likelihood ratios
+    # On branch: expect derived with prob (1-e), ancestral with prob e
+    # Off branch: expect ancestral with prob (1-e), derived with prob e
+    # Log-ratio for derived: log((1-e)/e)
+    # Log-ratio for ancestral: log(e/(1-e)) = -log((1-e)/e)
+    log_ratio_derived = math.log((1.0 - effective_error_rate) / effective_error_rate)
+    log_ratio_ancestral = -log_ratio_derived
+
     for snp in snps:
         position = snp.get_position(reference)
         if position is None:
@@ -150,7 +172,7 @@ def compute_branch_likelihood(
 
         variant = variants.get(position)
         if variant is None:
-            # No data at this position - neutral
+            # No data at this position - neutral (ratio = 1, log = 0)
             continue
 
         # Score this variant
@@ -162,25 +184,19 @@ def compute_branch_likelihood(
             is_ancient=is_ancient,
         )
 
+        # Weight the evidence by call quality
+        weight = max(0.1, score.weight)
+
         if score.is_derived:
             derived_count += 1
-            # Derived call supports being on this branch
-            # Log-likelihood contribution is based on weight
-            if score.weight > 0:
-                total_log_lik += math.log(score.weight)
-            else:
-                total_log_lik += -100.0  # Very negative
+            # Derived call SUPPORTS being on this branch
+            # Add positive log-likelihood ratio, weighted by quality
+            total_log_lik += log_ratio_derived * weight
         else:
             ancestral_count += 1
-            # Ancestral call argues against being on this branch
-            # This is evidence we shouldn't have descended past parent
-            if score.weight > 0:
-                # Penalize: we expected derived but got ancestral
-                # Use (1 - weight) as probability of error
-                prob_error = 1.0 - score.weight * 0.5  # Allow for some errors
-                total_log_lik += math.log(max(0.01, prob_error))
-            else:
-                total_log_lik += -1.0  # Modest penalty
+            # Ancestral call CONTRADICTS being on this branch
+            # Add negative log-likelihood ratio, weighted by quality
+            total_log_lik += log_ratio_ancestral * weight
 
     return BranchLikelihood(
         branch_id=branch_id,
@@ -261,13 +277,42 @@ class BayesianClassifier:
         self._prior = compute_coalescent_prior(tree, prior_type)
 
         # Build mapping from haplogroup -> SNPs
+        # Strategy:
+        # 1. First try tree's SNP assignments (node.snps) - this is authoritative
+        # 2. Fall back to SNP database haplogroup field for test fixtures
         self._haplogroup_snps: dict[str, list[SNP]] = {}
+
+        # Build SNP name to SNP lookup from database
+        snp_name_to_snp: dict[str, SNP] = {}
         for snp in snp_db:
-            hg = snp.haplogroup
-            if hg:
-                if hg not in self._haplogroup_snps:
-                    self._haplogroup_snps[hg] = []
-                self._haplogroup_snps[hg].append(snp)
+            snp_name_to_snp[snp.name] = snp
+            # Handle comma-separated aliases
+            for alias in snp.aliases:
+                snp_name_to_snp[alias] = snp
+
+        # Map each tree node's SNPs to actual SNP objects
+        tree_has_snps = False
+        for node in tree.iter_depth_first():
+            snps_for_node: list[SNP] = []
+            for snp_name in node.snps:
+                tree_has_snps = True
+                # Handle comma-separated SNP names (e.g., "MF48436, PF6419")
+                for name_part in snp_name.split(","):
+                    name_part = name_part.strip()
+                    if name_part in snp_name_to_snp:
+                        snps_for_node.append(snp_name_to_snp[name_part])
+            if snps_for_node:
+                self._haplogroup_snps[node.name] = snps_for_node
+
+        # Fallback: if tree has no SNPs defined, use SNP database haplogroup field
+        # This supports test fixtures and simple databases
+        if not tree_has_snps:
+            for snp in snp_db:
+                hg = snp.haplogroup
+                if hg and hg in tree:
+                    if hg not in self._haplogroup_snps:
+                        self._haplogroup_snps[hg] = []
+                    self._haplogroup_snps[hg].append(snp)
 
     def _get_leaf_haplogroups(self) -> list[str]:
         """Get all leaf haplogroups (terminal nodes) in the tree."""
