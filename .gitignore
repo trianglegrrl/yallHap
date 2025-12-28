@@ -149,6 +149,9 @@ yhaplo/
 paper/
 output/
 ALAINA_VOICE.md
+scripts/compile_p*
+scripts/generat*
+scripts/verify_p*
 
 # Cursor plan files
 .cursor-plans/
@@ -156,3 +159,6 @@ ALAINA_VOICE.md
 pathPhynder/
 
 results/
+
+yallhap-validation*.md5
+yallhap-validation*.tar.gz
