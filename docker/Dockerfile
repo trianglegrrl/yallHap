@@ -2,7 +2,7 @@
 # Multi-stage build for smaller final image
 
 # Build stage
-FROM python:3.11-slim as builder
+FROM python:3.11-slim AS builder
 
 WORKDIR /build
 
@@ -13,11 +13,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     zlib1g-dev \
     libbz2-dev \
     liblzma-dev \
-    libcurl4-openssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies
-COPY pyproject.toml .
+# Copy source code and build
+COPY pyproject.toml README.md LICENSE ./
+COPY src/ ./src/
 RUN pip install --no-cache-dir build && \
     pip wheel --no-cache-dir --wheel-dir /wheels .
 
@@ -26,7 +26,7 @@ FROM python:3.11-slim
 
 LABEL maintainer="yallHap Contributors"
 LABEL description="Modern Y-chromosome haplogroup inference"
-LABEL version="0.1.0"
+LABEL version="0.2.0"
 
 WORKDIR /app
 
