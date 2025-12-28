@@ -291,7 +291,7 @@ python scripts/download_gnomad_highcov.py
 python scripts/run_benchmarks.py --threads 16
 
 # 3. Compare results
-cat paper/benchmark_results.json
+cat results/benchmark_results.json
 ```
 
 Expected results:
