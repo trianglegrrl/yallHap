@@ -13,9 +13,9 @@ import pytest
 
 from yallhap.scoring import (
     VariantScore,
-    score_variant_with_ad,
-    compute_variant_weight,
     compute_damage_probability,
+    compute_variant_weight,
+    score_variant_with_ad,
 )
 from yallhap.snps import SNP
 from yallhap.vcf import Variant

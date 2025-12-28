@@ -242,6 +242,25 @@ def classify(
     VCF must contain Y-chromosome variants and be indexed (.tbi or .csi).
     """
     try:
+        # Auto-adjust filtering for ancient DNA with Bayesian mode
+        # The Bayesian classifier uses allelic depth to model uncertainty,
+        # so aggressive pre-filtering defeats its purpose
+        if ancient and bayesian:
+            if min_depth == 10:  # User didn't override default
+                min_depth = 1
+                click.echo(
+                    "Note: Using min-depth=1 for ancient+bayesian mode "
+                    "(override with --min-depth)",
+                    err=True,
+                )
+            if min_quality == 20:  # User didn't override default
+                min_quality = 0
+                click.echo(
+                    "Note: Using min-quality=0 for ancient+bayesian mode "
+                    "(override with --min-quality)",
+                    err=True,
+                )
+
         # Load tree
         click.echo(f"Loading tree from {tree}...", err=True)
         tree_obj = Tree.from_json(tree)
@@ -742,11 +761,15 @@ def download(output_dir: Path, force: bool) -> None:
     - YFull tree from GitHub
     - YBrowse SNP database (GRCh38/hg38 positions)
     - YBrowse SNP database (GRCh37/hg19 positions)
+    - ISOGG SNP database (GRCh37 - for --isogg mode)
+    - ISOGG SNP database (GRCh38 - for --isogg mode)
 
     Use the appropriate SNP database for your VCF reference:
-    - GRCh37/hg19 VCFs: ybrowse_snps_grch37.csv
-    - GRCh38/hg38 VCFs: ybrowse_snps_grch38.csv
-    - T2T VCFs: ybrowse_snps_grch38.csv (positions lifted over automatically)
+    - GRCh37/hg19 VCFs: -s ybrowse_snps_grch37.csv -r grch37
+    - GRCh38/hg38 VCFs: -s ybrowse_snps_grch38.csv -r grch38
+    - T2T VCFs:         -s ybrowse_snps_grch38.csv -r t2t
+
+    For ISOGG mode, add --isogg and the database is auto-detected.
 
     Skips files that already exist unless --force is specified.
     """
@@ -768,6 +791,17 @@ def download(output_dir: Path, force: bool) -> None:
             "url": "http://ybrowse.org/gbrowse2/gff/snps_hg19.csv",
             "path": output_dir / "ybrowse_snps_grch37.csv",
             "label": "YBrowse SNPs (GRCh37)",
+        },
+        # ISOGG SNP databases from pathPhynder (for --isogg mode)
+        {
+            "url": "https://raw.githubusercontent.com/ruidlpm/pathPhynder/master/data/211108.snps_isogg_curated.txt",
+            "path": output_dir / "isogg_snps_grch37.txt",
+            "label": "ISOGG SNPs (GRCh37)",
+        },
+        {
+            "url": "https://raw.githubusercontent.com/ruidlpm/pathPhynder/master/data/211108.snps_isogg_curated.b38.txt",
+            "path": output_dir / "isogg_snps_grch38.txt",
+            "label": "ISOGG SNPs (GRCh38)",
         },
     ]
 
@@ -803,6 +837,9 @@ def download(output_dir: Path, force: bool) -> None:
     click.echo("  GRCh37/hg19 VCFs: -s ybrowse_snps_grch37.csv -r grch37", err=True)
     click.echo("  GRCh38/hg38 VCFs: -s ybrowse_snps_grch38.csv -r grch38", err=True)
     click.echo("  T2T VCFs:         -s ybrowse_snps_grch38.csv -r t2t", err=True)
+    click.echo("\nISOGG mode (for standardized haplogroup nomenclature):", err=True)
+    click.echo("  Add --isogg to classification commands", err=True)
+    click.echo("  ISOGG databases: isogg_snps_grch37.txt, isogg_snps_grch38.txt", err=True)
 
 
 if __name__ == "__main__":

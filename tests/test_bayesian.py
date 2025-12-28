@@ -10,14 +10,11 @@ TDD tests for:
 
 from __future__ import annotations
 
-import math
-from pathlib import Path
-
 import pytest
 
 from yallhap.bayesian import (
-    BranchLikelihood,
     BayesianClassifier,
+    BranchLikelihood,
     compute_branch_likelihood,
     compute_path_likelihood,
 )
@@ -763,3 +760,135 @@ class TestPriorInClassifier:
         # Both should sum to 1
         assert abs(sum(p for _, p in uniform_post) - 1.0) < 0.001
         assert abs(sum(p for _, p in coalescent_post) - 1.0) < 0.001
+
+
+class TestBayesianBranchLikelihoodRatios:
+    """Test that branch likelihood uses log-likelihood ratios correctly."""
+
+    def test_derived_match_gives_positive_log_ratio(
+        self, simple_tree: Tree, simple_snp_db: SNPDatabase
+    ) -> None:
+        """Seeing derived allele at a branch SNP should give positive log-likelihood."""
+        # Create classifier
+        classifier = BayesianClassifier(
+            tree=simple_tree,
+            snp_db=simple_snp_db,
+        )
+
+        # A-a1 SNP: ancestral=G, derived=A at position 2000
+        # Seeing derived A should give positive log-likelihood for A-a branch
+        variants = {
+            2000: Variant(
+                chrom="Y",
+                position=2000,
+                ref="G",
+                alt=("A",),
+                genotype=1,  # Derived
+                quality=99,
+                allele_depth=(0, 30),  # All derived reads
+            ),
+        }
+
+        branch_ll = classifier._compute_all_branch_likelihoods(variants)
+
+        # A-a branch should have positive log-likelihood (derived match rewards)
+        if "A-a" in branch_ll:
+            assert branch_ll["A-a"].log_likelihood > 0
+
+    def test_ancestral_mismatch_gives_negative_log_ratio(
+        self, simple_tree: Tree, simple_snp_db: SNPDatabase
+    ) -> None:
+        """Seeing ancestral allele when derived expected should penalize."""
+        classifier = BayesianClassifier(
+            tree=simple_tree,
+            snp_db=simple_snp_db,
+        )
+
+        # A-a1 SNP: ancestral=G, derived=A at position 2000
+        # Seeing ancestral G should give negative log-likelihood for A-a branch
+        variants = {
+            2000: Variant(
+                chrom="Y",
+                position=2000,
+                ref="G",
+                alt=("A",),
+                genotype=0,  # Ancestral
+                quality=99,
+                allele_depth=(30, 0),  # All ancestral reads
+            ),
+        }
+
+        branch_ll = classifier._compute_all_branch_likelihoods(variants)
+
+        # A-a branch should have negative log-likelihood (ancestral mismatch penalty)
+        if "A-a" in branch_ll:
+            assert branch_ll["A-a"].log_likelihood < 0
+
+    def test_root_has_zero_likelihood_no_snps(
+        self, simple_tree: Tree, simple_snp_db: SNPDatabase
+    ) -> None:
+        """ROOT branch has no defining SNPs so log-likelihood should be 0."""
+        classifier = BayesianClassifier(
+            tree=simple_tree,
+            snp_db=simple_snp_db,
+        )
+
+        # A-a1 SNP: ancestral=G, derived=A at position 2000
+        variants = {
+            2000: Variant(
+                chrom="Y",
+                position=2000,
+                ref="G",
+                alt=("A",),
+                genotype=1,
+                quality=99,
+                allele_depth=(0, 30),
+            ),
+        }
+
+        branch_ll = classifier._compute_all_branch_likelihoods(variants)
+
+        # ROOT has no SNPs, so log-likelihood should be 0
+        root_name = 'ROOT (Y-Chromosome "Adam")'
+        if root_name in branch_ll:
+            assert branch_ll[root_name].log_likelihood == 0.0
+
+    def test_path_accumulates_branch_likelihoods(
+        self, simple_tree: Tree, simple_snp_db: SNPDatabase
+    ) -> None:
+        """Path to haplogroup accumulates all branch likelihoods."""
+        classifier = BayesianClassifier(
+            tree=simple_tree,
+            snp_db=simple_snp_db,
+        )
+
+        # See derived for both A and A-a SNPs
+        # A1 SNP: ancestral=C, derived=T at position 1000
+        # A-a1 SNP: ancestral=G, derived=A at position 2000
+        variants = {
+            1000: Variant(
+                chrom="Y",
+                position=1000,
+                ref="C",
+                alt=("T",),
+                genotype=1,
+                quality=99,
+                allele_depth=(0, 30),
+            ),
+            2000: Variant(
+                chrom="Y",
+                position=2000,
+                ref="G",
+                alt=("A",),
+                genotype=1,
+                quality=99,
+                allele_depth=(0, 30),
+            ),
+        }
+
+        branch_ll = classifier._compute_all_branch_likelihoods(variants)
+        path_ll = compute_path_likelihood(simple_tree, "A-a", branch_ll)
+
+        # Path to A-a includes ROOT + A + A-a
+        # With derived matches, should be positive
+        assert path_ll > 0

@@ -15,7 +15,6 @@ from dataclasses import dataclass
 from yallhap.snps import SNP
 from yallhap.vcf import Variant
 
-
 # Damage-typical transitions (C>T on forward strand, G>A on reverse)
 DAMAGE_TRANSITIONS = frozenset([("C", "T"), ("G", "A")])
 

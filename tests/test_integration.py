@@ -42,7 +42,7 @@ class TestAncientModeIntegration:
 
     def test_isogg_module_imports(self) -> None:
         """ISOGG module imports successfully."""
-        from yallhap.isogg import ISOGGDatabase, ISOGGMapper, ISOGGSNP
+        from yallhap.isogg import ISOGGSNP, ISOGGDatabase, ISOGGMapper
 
         assert ISOGGDatabase is not None
         assert ISOGGMapper is not None
@@ -61,7 +61,7 @@ class TestAncientModeIntegration:
 
     def test_full_workflow_contamination(self) -> None:
         """Test contamination estimation on simulated data."""
-        from yallhap.contamination import ContaminationResult, estimate_contamination
+        from yallhap.contamination import estimate_contamination
         from yallhap.vcf import Variant
 
         # Simulate a clean sample (no contamination)
