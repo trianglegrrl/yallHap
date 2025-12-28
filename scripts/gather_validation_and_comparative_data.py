@@ -54,6 +54,98 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 
+# Variant density bin constants for stratified AADR analysis
+# Based on actual called variants / total variants in Y-only VCF
+DENSITY_BINS = ["<1%", "1-10%", "10-50%", ">=50%"]
+
+
+def get_density_bin(density_pct: float) -> str:
+    """Assign variant density percentage to bin."""
+    if density_pct < 1.0:
+        return "<1%"
+    elif density_pct < 10.0:
+        return "1-10%"
+    elif density_pct < 50.0:
+        return "10-50%"
+    else:
+        return ">=50%"
+
+
+def calculate_variant_density(
+    vcf_path: Path,
+    sample_ids: list[str],
+    cache_path: Path | None = None,
+) -> dict[str, float]:
+    """
+    Calculate variant density for each sample from the VCF.
+
+    Variant density = (called variants / total variants) * 100
+
+    Args:
+        vcf_path: Path to VCF file
+        sample_ids: List of sample IDs to calculate density for
+        cache_path: Optional path to cache file
+
+    Returns:
+        Dictionary mapping sample_id -> density percentage (0-100)
+    """
+    import pysam
+
+    # Check cache
+    if cache_path and cache_path.exists():
+        vcf_mtime = vcf_path.stat().st_mtime
+        cache_mtime = cache_path.stat().st_mtime
+        if cache_mtime > vcf_mtime:
+            print("    Loading cached variant density...")
+            with open(cache_path) as f:
+                cached = json.load(f)
+            # Filter to requested samples
+            return {s: cached[s] for s in sample_ids if s in cached}
+
+    print("    Calculating variant density from VCF (this may take a few minutes)...")
+
+    vcf = pysam.VariantFile(str(vcf_path))
+    vcf_samples = set(vcf.header.samples)
+
+    # Filter to samples in VCF
+    target_samples = [s for s in sample_ids if s in vcf_samples]
+
+    # Initialize counts
+    called_counts: dict[str, int] = {s: 0 for s in target_samples}
+    total_variants = 0
+
+    # Count called variants per sample
+    for i, rec in enumerate(vcf.fetch()):
+        total_variants += 1
+        if i % 5000 == 0 and i > 0:
+            print(f"      Processed {i} variants...")
+        for sample in target_samples:
+            gt = rec.samples[sample]["GT"]
+            if gt is not None and gt != (None,) and gt != (None, None):
+                called_counts[sample] += 1
+
+    vcf.close()
+    print(f"      Processed {total_variants} total variants")
+
+    # Calculate density percentages
+    density_map: dict[str, float] = {}
+    for sample, called in called_counts.items():
+        density_map[sample] = (called / total_variants * 100) if total_variants > 0 else 0.0
+
+    # Cache results
+    if cache_path:
+        print(f"    Caching variant density to {cache_path.name}...")
+        all_densities = {}
+        if cache_path.exists():
+            with open(cache_path) as f:
+                all_densities = json.load(f)
+        all_densities.update(density_map)
+        with open(cache_path, "w") as f:
+            json.dump(all_densities, f)
+
+    return density_map
+
+
 @dataclass
 class SampleInfo:
     """Information about a sample for validation."""
@@ -1063,8 +1155,16 @@ def benchmark_aadr(
     base_dir: Path,
     subsample: int | None = None,
     threads: int = 1,
+    samples_per_bin: int = 500,
 ) -> list[ValidationResult]:
-    """Run AADR ancient DNA benchmark (transversions-only)."""
+    """
+    Run AADR ancient DNA benchmark with variant density stratification.
+
+    Tests both heuristic transversions-only and Bayesian ancient modes,
+    stratified by variant density bins.
+    """
+    from collections import defaultdict
+
     ancient_dir = base_dir / "data" / "ancient"
     validation_dir = base_dir / "data" / "validation"
     data_dir = base_dir / "data"
@@ -1073,6 +1173,7 @@ def benchmark_aadr(
     vcf_path = ancient_dir / "aadr_chrY_v2.vcf.gz"
     tree_path = data_dir / "yfull_tree.json"
     snp_db_path = validation_dir / "ybrowse_snps_hg19.csv"
+    cache_path = ancient_dir / "aadr_variant_density.json"
 
     for path in [ground_truth_path, vcf_path, tree_path, snp_db_path]:
         if not path.exists():
@@ -1090,28 +1191,54 @@ def benchmark_aadr(
     vcf_samples = set(vcf.header.samples)
     vcf.close()
 
-    samples = [s for s in ground_truth.keys() if s in vcf_samples]
+    valid_samples = [s for s in ground_truth.keys() if s in vcf_samples]
+    print(f"    {len(valid_samples)} samples with ground truth in VCF")
 
-    if subsample and len(samples) > subsample:
+    # Calculate variant density
+    density_map = calculate_variant_density(vcf_path, valid_samples, cache_path)
+
+    # Group samples by density bin
+    samples_by_bin: dict[str, list[str]] = defaultdict(list)
+    for sample_id in valid_samples:
+        density = density_map.get(sample_id, 0.0)
+        bin_name = get_density_bin(density)
+        samples_by_bin[bin_name].append(sample_id)
+
+    print("    Samples by variant density bin:")
+    for bin_name in DENSITY_BINS:
+        count = len(samples_by_bin.get(bin_name, []))
+        print(f"      {bin_name}: {count}")
+
+    # Select samples from each bin
+    selected_samples: list[str] = []
+    for bin_name in DENSITY_BINS:
+        bin_samples = samples_by_bin.get(bin_name, [])
+        if len(bin_samples) > samples_per_bin:
+            random.seed(42)
+            bin_samples = random.sample(bin_samples, samples_per_bin)
+        selected_samples.extend(bin_samples)
+
+    # Apply overall subsample if requested
+    if subsample and len(selected_samples) > subsample:
         random.seed(42)
-        samples = random.sample(samples, subsample)
+        selected_samples = random.sample(selected_samples, subsample)
 
-    if not samples:
+    if not selected_samples:
         print("    SKIP: No overlapping samples")
         return []
 
-    print(f"    {len(samples)} samples")
+    print(f"    Running validation on {len(selected_samples)} samples...")
 
     results = []
 
-    print("    Running transversions-only mode...")
+    print("    Running heuristic transversions-only mode...")
     results.append(
         run_yallhap_benchmark(
             vcf_path=vcf_path,
             tree_path=tree_path,
             snp_db_path=snp_db_path,
             ground_truth=ground_truth,
-            samples=samples,
+            samples=selected_samples,
             reference="grch37",
             bayesian=False,
             transversions_only=True,
@@ -1120,18 +1247,18 @@ def benchmark_aadr(
         )
     )
 
-    print("    Running Bayesian + transversions mode...")
+    print("    Running Bayesian ancient mode...")
     results.append(
         run_yallhap_benchmark(
             vcf_path=vcf_path,
             tree_path=tree_path,
             snp_db_path=snp_db_path,
             ground_truth=ground_truth,
-            samples=samples,
+            samples=selected_samples,
             reference="grch37",
             bayesian=True,
             ancient_mode=True,
-            transversions_only=True,
+            transversions_only=False,  # Bayesian ancient mode, not transversions
             threads=threads,
             dataset_name="AADR v54",
         )
