@@ -22,20 +22,21 @@ Validated against established datasets:
 
 | Dataset | Samples | Same Major Lineage | Reference | Notes |
 |---------|---------|-------------------|-----------|-------|
-| 1000 Genomes Phase 3 | 1,233 | **99.76%** (95% CI: 99.24-99.96%) | GRCh37 | Modern WGS |
-| AADR Ancient DNA | 1,497 | **79.4%** (95% CI: 77.3-81.4%) | GRCh37 | Stratified by coverage |
-| gnomAD HGDP/1KG | 200 | **100.00%** (95% CI: 98.17-100%) | GRCh38 | High-coverage WGS |
+| 1000 Genomes Phase 3 | 1,233 | **99.8%** (95% CI: 99.3-100%) | GRCh37 | Modern WGS, heuristic mode |
+| AADR Ancient DNA | 7,333 | **90.7%** Bayesian / **88.3%** Heuristic | GRCh37 | Full dataset, stratified by variant density |
+| gnomAD HGDP/1KG | 1,231 | **99.9%** (95% CI: 99.5-100%) | GRCh38 | High-coverage WGS |
 
 **1000 Genomes details:**
 - Only 3 misclassified samples (2 rare A0 haplogroups, 1 NO/K confusion)
 - Mean confidence: 0.994
 - Mean derived SNPs: 15.4
 
-**AADR Ancient DNA details:**
-- Stratified by coverage: <0.1× (38%), 0.1-0.5× (75%), 0.5-1× (97%), ≥1× (99%)
-- At adequate coverage (≥0.5×), accuracy is 97-99%, comparable to modern WGS
-- Transversions-only mode for maximum damage resistance
-- Mean derived SNPs: 10.0 (low coverage typical for aDNA)
+**AADR Ancient DNA details (7,333 samples):**
+- Overall: 90.7% accuracy with Bayesian ancient mode vs 88.3% with heuristic transversions-only
+- Stratified by variant density: <1% (33.7%), 1-4% (37.9%), 4-10% (71.7%), 10-50% (97.8%), ≥50% (99.0%)
+- At ≥10% variant density, both modes achieve 97-99% accuracy, comparable to modern WGS
+- **Bayesian mode recommended for 4-10% variant density** (+12-24 pp improvement)
+- Variant density = (called variants / total variants in chrY VCF) × 100%
 
 **gnomAD High-Coverage details:**
 - 200 samples randomly selected from 1,231 overlapping with 1000 Genomes
@@ -205,6 +206,21 @@ yallhap classify sample.vcf.gz \
 
 yallHap includes specialized handling for ancient DNA samples with post-mortem damage.
 
+### Recommended: Bayesian Ancient Mode
+
+For ancient DNA samples with moderate variant density (4–10%), **Bayesian ancient mode is recommended**, achieving +12–24 percentage point improvement over heuristic mode in this range:
+
+```bash
+yallhap classify ancient.vcf.gz \
+    --tree data/yfull_tree.json \
+    --snp-db data/ybrowse_snps_grch38.csv \
+    --ancient \
+    --bayesian \
+    --output result.json
+```
+
+**Variant density** is calculated as `(called variants / total variants in chrY VCF) × 100%`. You can estimate this from your VCF or calculate it directly. At ≥10% variant density, both modes achieve comparable accuracy (97–99%); below 4%, classification is unreliable regardless of mode.
+
 ### Basic Ancient Mode
 
 Filters C>T and G>A transitions at read termini:
@@ -291,12 +307,22 @@ for result in results:
 ### Ancient DNA Mode
 
 ```python
+# Recommended: Bayesian ancient mode for moderate variant density (4-10%)
 classifier = HaplogroupClassifier(
     tree=tree,
     snp_db=snp_db,
     reference="grch37",
     ancient_mode=True,
-    transversions_only=True,  # Strictest mode
+    bayesian=True,  # Recommended for 4-10% variant density
+)
+
+# Alternative: Transversions-only mode (strictest filtering)
+classifier = HaplogroupClassifier(
+    tree=tree,
+    snp_db=snp_db,
+    reference="grch37",
+    ancient_mode=True,
+    transversions_only=True,
     damage_rescale="moderate",
 )
 ```
@@ -476,17 +502,28 @@ rule yallhap:
 
 ### Bayesian Mode
 
-An experimental Bayesian classification mode is available that computes true posterior probabilities over tree paths:
+A Bayesian classification mode is available that computes posterior probabilities over tree paths using log-likelihood ratios:
 
 ```bash
+# For modern samples
 yallhap classify sample.vcf.gz \
     --tree data/yfull_tree.json \
     --snp-db data/ybrowse_snps_grch38.csv \
     --bayesian \
     --output result.json
+
+# For ancient DNA (recommended for 4-10% variant density)
+yallhap classify ancient.vcf.gz \
+    --tree data/yfull_tree.json \
+    --snp-db data/ybrowse_snps_grch38.csv \
+    --ancient \
+    --bayesian \
+    --output result.json
 ```
 
-This mode incorporates allelic depth (AD) information when available. However, validation testing showed **no accuracy improvement** over the default heuristic approach on well-characterized samples (identical results across 3,200+ samples from 1000 Genomes, AADR, and gnomAD). Bayesian mode is disabled by default and intended for research purposes.
+**Performance:** On modern high-coverage samples (1000 Genomes, gnomAD), Bayesian mode produces identical results to heuristic mode—no accuracy improvement. However, **for ancient DNA with moderate variant density (4–10%)**, Bayesian ancient mode achieves +12–24 percentage point improvement over heuristic mode (71.7% vs 52.4% accuracy). On the full AADR ancient DNA dataset (7,333 samples), Bayesian ancient mode achieves 90.7% accuracy vs 88.3% for heuristic transversions-only mode.
+
+This mode incorporates allelic depth (AD) information when available and uses adjusted error rates for ancient DNA damage modeling. For modern samples, heuristic mode is recommended for speed; for ancient DNA at 4–10% variant density, Bayesian mode is recommended for improved accuracy.
 
 ## Development
 
