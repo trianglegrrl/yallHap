@@ -45,15 +45,86 @@ except ImportError:
 
 # Variant density bin constants for stratified AADR analysis
 # Based on actual called variants / total variants in Y-only VCF
-DENSITY_BINS = ["<1%", "1-10%", "10-50%", ">=50%"]
+# 5 bins with 1-4% / 4-10% split to highlight where Bayesian mode improves
+DENSITY_BINS = ["<1%", "1-4%", "4-10%", "10-50%", ">=50%"]
+
+# Minimum variant density (%) for reliable ISOGG comparison
+# Below this threshold, samples are excluded from ISOGG metrics
+ISOGG_MIN_DENSITY = 4.0
+
+
+# =============================================================================
+# ISOGG Comparison Functions
+# =============================================================================
+
+
+def normalize_isogg(hg: str) -> str:
+    """
+    Normalize ISOGG haplogroup for comparison.
+
+    - Remove tildes (~) indicating uncertainty
+    - Uppercase
+    - Strip whitespace
+    """
+    if not hg:
+        return ""
+    return hg.replace("~", "").strip().upper()
+
+
+def get_major_clade(hg: str) -> str:
+    """Extract major clade (first letter) from haplogroup."""
+    if not hg:
+        return ""
+    hg = normalize_isogg(hg)
+    if not hg:
+        return ""
+    return hg[0] if hg[0].isalpha() else ""
+
+
+def is_isogg_prefix_match(hg1: str, hg2: str) -> bool:
+    """Check if one haplogroup is a prefix of the other."""
+    h1 = normalize_isogg(hg1)
+    h2 = normalize_isogg(hg2)
+    if not h1 or not h2:
+        return False
+    return h1.startswith(h2) or h2.startswith(h1)
+
+
+def classify_isogg_match(predicted: str, ground_truth: str) -> str:
+    """
+    Classify the match type between predicted and ground truth ISOGG.
+
+    Returns one of: exact, prefix, major_clade, mismatch
+    """
+    pred_norm = normalize_isogg(predicted)
+    gt_norm = normalize_isogg(ground_truth)
+
+    if not pred_norm or not gt_norm:
+        return "mismatch"
+
+    # Exact match
+    if pred_norm == gt_norm:
+        return "exact"
+
+    # Prefix match (one is ancestor of the other)
+    if is_isogg_prefix_match(pred_norm, gt_norm):
+        return "prefix"
+
+    # Major clade match (same first letter)
+    if get_major_clade(pred_norm) == get_major_clade(gt_norm):
+        return "major_clade"
+
+    return "mismatch"
 
 
 def get_density_bin(density_pct: float) -> str:
     """Assign variant density percentage to bin."""
     if density_pct < 1.0:
         return "<1%"
+    elif density_pct < 4.0:
+        return "1-4%"
     elif density_pct < 10.0:
-        return "1-10%"
+        return "4-10%"
     elif density_pct < 50.0:
         return "10-50%"
     else:
@@ -194,6 +265,32 @@ class StratifiedResult:
 
 
 @dataclass
+class ISOGGMetrics:
+    """ISOGG nomenclature comparison metrics."""
+
+    total: int = 0
+    exact: int = 0
+    prefix: int = 0  # One is ancestor of other (compatible)
+    major_clade: int = 0  # Same major clade but different subclade
+    mismatch: int = 0  # Different major clades
+
+    @property
+    def compatible(self) -> int:
+        """Exact + prefix matches (phylogenetically compatible assignments)."""
+        return self.exact + self.prefix
+
+    @property
+    def compatible_rate(self) -> float:
+        """Percentage of compatible assignments."""
+        return 100 * self.compatible / self.total if self.total > 0 else 0.0
+
+    @property
+    def exact_rate(self) -> float:
+        """Percentage of exact matches."""
+        return 100 * self.exact / self.total if self.total > 0 else 0.0
+
+
+@dataclass
 class BenchmarkResult:
     """Results for a single tool/dataset combination."""
 
@@ -207,6 +304,7 @@ class BenchmarkResult:
     mean_derived_snps: float | None = None
     notes: list[str] = field(default_factory=list)
     stratified: list[StratifiedResult] = field(default_factory=list)
+    isogg_metrics: ISOGGMetrics | None = None
 
     @property
     def major_lineage_rate(self) -> float:
@@ -471,7 +569,7 @@ def benchmark_aadr(
     """
     Run AADR ancient DNA benchmark with stratified variant density analysis.
 
-    Samples are stratified by variant density into bins (<1%, 1-10%, 10-50%, >=50%)
+    Samples are stratified by variant density into bins (<1%, 1-4%, 4-10%, 10-50%, >=50%)
     based on the percentage of called variants in the Y-only VCF.
 
     Args:
@@ -508,6 +606,9 @@ def benchmark_aadr(
         # Only keep proper haplogroup names (X-YYYY format)
         if hg and "-" in hg and hg[0].isalpha():
             ground_truth[sample_id] = hg
+
+    # Load ISOGG ground truth if available
+    isogg_ground_truth = load_ground_truth(ground_truth_path, "haplogroup_isogg")
 
     # Get samples in VCF
     import pysam
@@ -552,8 +653,8 @@ def benchmark_aadr(
 
         isogg_path = isogg_db_path or (base_dir / "data" / "isogg_snps_grch38.txt")
         if isogg_path.exists():
-            isogg_db = ISOGGDatabase.from_pathphynder_file(isogg_path)
-            isogg_mapper = ISOGGMapper(isogg_db)
+            isogg_db = ISOGGDatabase.from_file(isogg_path)
+            isogg_mapper = ISOGGMapper(tree, isogg_db)
             print(f"  Loaded {len(isogg_db)} ISOGG SNPs")
         else:
             print(f"  Warning: ISOGG database not found at {isogg_path}")
@@ -580,7 +681,6 @@ def benchmark_aadr(
     # Store config for potential post-processing
     _ = estimate_contamination  # Will be used in future enhancement
     _ = max_tolerance  # Will be used in future enhancement
-    _ = isogg_mapper  # Will be used for ISOGG output
 
     # Run stratified validation
     heur_stratified: list[StratifiedResult] = []
@@ -592,6 +692,10 @@ def benchmark_aadr(
     total_runtime = 0.0
     all_confidences: list[float] = []
     all_derived: list[int] = []
+
+    # ISOGG metrics if mapper is available
+    heur_isogg = ISOGGMetrics() if isogg_mapper else None
+    bayes_isogg = ISOGGMetrics() if isogg_mapper else None
 
     for bin_name in DENSITY_BINS:
         samples = samples_by_bin.get(bin_name, [])
@@ -627,6 +731,24 @@ def benchmark_aadr(
                 if result.snp_stats and result.snp_stats.derived > 0:
                     all_derived.append(result.snp_stats.derived)
 
+                # ISOGG comparison (only for samples with sufficient coverage)
+                if heur_isogg and isogg_mapper:
+                    sample_density = density_map.get(result.sample, 0)
+                    if sample_density >= ISOGG_MIN_DENSITY:
+                        isogg_gt = isogg_ground_truth.get(result.sample, "")
+                        if isogg_gt and isogg_gt not in (".", "..", "NA", "n/a"):
+                            isogg_pred = isogg_mapper.to_isogg(result.haplogroup)
+                            match = classify_isogg_match(isogg_pred, isogg_gt)
+                            heur_isogg.total += 1
+                            if match == "exact":
+                                heur_isogg.exact += 1
+                            elif match == "prefix":
+                                heur_isogg.prefix += 1
+                            elif match == "major_clade":
+                                heur_isogg.major_clade += 1
+                            else:
+                                heur_isogg.mismatch += 1
+
         heur_accuracy = heur_correct / heur_bin_total if heur_bin_total > 0 else 0
         heur_stratified.append(StratifiedResult(
             bin_name=bin_name,
@@ -655,6 +777,24 @@ def benchmark_aadr(
                 if expected_major == called_major:
                     bayes_correct += 1
 
+                # ISOGG comparison (only for samples with sufficient coverage)
+                if bayes_isogg and isogg_mapper:
+                    sample_density = density_map.get(result.sample, 0)
+                    if sample_density >= ISOGG_MIN_DENSITY:
+                        isogg_gt = isogg_ground_truth.get(result.sample, "")
+                        if isogg_gt and isogg_gt not in (".", "..", "NA", "n/a"):
+                            isogg_pred = isogg_mapper.to_isogg(result.haplogroup)
+                            match = classify_isogg_match(isogg_pred, isogg_gt)
+                            bayes_isogg.total += 1
+                            if match == "exact":
+                                bayes_isogg.exact += 1
+                            elif match == "prefix":
+                                bayes_isogg.prefix += 1
+                            elif match == "major_clade":
+                                bayes_isogg.major_clade += 1
+                            else:
+                                bayes_isogg.mismatch += 1
+
         bayes_accuracy = bayes_correct / bayes_bin_total if bayes_bin_total > 0 else 0
         bayes_stratified.append(StratifiedResult(
             bin_name=bin_name,
@@ -678,6 +818,11 @@ def benchmark_aadr(
 
     print(f"  Overall: {heur_overall:.1%} ({heur_total_correct}/{heur_total_tested})")
 
+    # Print ISOGG metrics if available
+    if heur_isogg and heur_isogg.total > 0:
+        print(f"  ISOGG compatible: {heur_isogg.compatible_rate:.1f}% "
+              f"({heur_isogg.compatible}/{heur_isogg.total})")
+
     heuristic_result = BenchmarkResult(
         tool_name="yallHap",
         dataset="AADR v54 (stratified)",
@@ -689,6 +834,7 @@ def benchmark_aadr(
         mean_derived_snps=mean_derived,
         notes=["GRCh37 reference", "Transversions-only", "Stratified by variant density"],
         stratified=heur_stratified,
+        isogg_metrics=heur_isogg,
     )
 
     bayesian_result = BenchmarkResult(
@@ -702,6 +848,7 @@ def benchmark_aadr(
         mean_derived_snps=mean_derived,
         notes=["GRCh37 reference", "Bayesian + transversions-only", "Stratified by variant density"],
         stratified=bayes_stratified,
+        isogg_metrics=bayes_isogg,
     )
 
     return heuristic_result, bayesian_result
@@ -1034,15 +1181,35 @@ def benchmark_yleaf_1kg(
 
 def print_results_table(results: list[BenchmarkResult]) -> None:
     """Print formatted results table."""
-    print("\n" + "=" * 95)
+    # Check if any results have ISOGG metrics
+    has_isogg = any(r.isogg_metrics and r.isogg_metrics.total > 0 for r in results)
+
+    print("\n" + "=" * 110)
     print("BENCHMARK RESULTS")
-    print("=" * 95)
+    print("=" * 110)
     print()
+
+    if has_isogg:
+        print(f"{'Dataset':<20} {'Tool':<18} {'Samples':>8} {'Major':>8} {'Exact':>8} {'ISOGG':>10} {'Conf':>6}")
+        print("-" * 110)
+    else:
     print(f"{'Dataset':<20} {'Tool':<18} {'Samples':>8} {'Major Match':>12} {'Exact':>8} {'Conf':>6} {'SNPs':>6}")
-    print("-" * 95)
+        print("-" * 110)
 
     for r in results:
         conf_str = f"{r.mean_confidence:.2f}" if r.mean_confidence else "N/A"
+
+        if has_isogg:
+            if r.isogg_metrics and r.isogg_metrics.total > 0:
+                isogg_str = f"{r.isogg_metrics.compatible_rate:.1f}%"
+            else:
+                isogg_str = "N/A"
+            print(
+                f"{r.dataset:<20} {r.tool_name:<18} {r.total_samples:>8} "
+                f"{r.major_lineage_rate:>6.1f}% {r.exact_match_rate:>6.1f}% "
+                f"{isogg_str:>10} {conf_str:>6}"
+            )
+        else:
         snps_str = f"{r.mean_derived_snps:.1f}" if r.mean_derived_snps else "N/A"
         print(
             f"{r.dataset:<20} {r.tool_name:<18} {r.total_samples:>8} "
@@ -1050,7 +1217,13 @@ def print_results_table(results: list[BenchmarkResult]) -> None:
             f"{conf_str:>6} {snps_str:>6}"
         )
 
-    print("-" * 95)
+    print("-" * 110)
+
+    # Print ISOGG legend if applicable
+    if has_isogg:
+        print("\nISOGG column = Compatible rate (exact + prefix matches)")
+        print("  - Exact: Identical ISOGG haplogroups")
+        print("  - Prefix: One is ancestor of the other (e.g., R1b vs R1b1a1b)")
 
 
 def save_results(base_dir: Path, results: list[BenchmarkResult]) -> None:
@@ -1092,6 +1265,19 @@ def save_results(base_dir: Path, results: list[BenchmarkResult]) -> None:
                 }
                 for s in r.stratified
             ]
+
+        # Add ISOGG metrics if present
+        if r.isogg_metrics and r.isogg_metrics.total > 0:
+            result_dict["isogg"] = {
+                "total": r.isogg_metrics.total,
+                "exact": r.isogg_metrics.exact,
+                "exact_pct": round(r.isogg_metrics.exact_rate, 2),
+                "prefix": r.isogg_metrics.prefix,
+                "compatible": r.isogg_metrics.compatible,
+                "compatible_pct": round(r.isogg_metrics.compatible_rate, 2),
+                "major_clade": r.isogg_metrics.major_clade,
+                "mismatch": r.isogg_metrics.mismatch,
+            }
 
         json_data["results"].append(result_dict)
 

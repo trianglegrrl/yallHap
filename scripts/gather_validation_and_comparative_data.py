@@ -59,6 +59,66 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 DENSITY_BINS = ["<1%", "1-10%", "10-50%", ">=50%"]
 
 
+# =============================================================================
+# Minimum variant density (%) for reliable ISOGG comparison
+# Below this threshold, samples are excluded from ISOGG metrics
+ISOGG_MIN_DENSITY = 4.0
+
+# ISOGG Comparison Functions
+# =============================================================================
+
+
+def normalize_isogg(hg: str) -> str:
+    """
+    Normalize ISOGG haplogroup for comparison.
+
+    - Remove tildes (~) indicating uncertainty
+    - Uppercase
+    - Strip whitespace
+    """
+    if not hg:
+        return ""
+    return hg.replace("~", "").strip().upper()
+
+
+def is_isogg_prefix_match(hg1: str, hg2: str) -> bool:
+    """Check if one haplogroup is a prefix of the other."""
+    h1 = normalize_isogg(hg1)
+    h2 = normalize_isogg(hg2)
+    if not h1 or not h2:
+        return False
+    return h1.startswith(h2) or h2.startswith(h1)
+
+
+def classify_isogg_match(predicted: str, ground_truth: str) -> str:
+    """
+    Classify the match type between predicted and ground truth ISOGG.
+
+    Returns one of: exact, prefix, major_clade, mismatch
+    """
+    pred_norm = normalize_isogg(predicted)
+    gt_norm = normalize_isogg(ground_truth)
+
+    if not pred_norm or not gt_norm:
+        return "mismatch"
+
+    # Exact match
+    if pred_norm == gt_norm:
+        return "exact"
+
+    # Prefix match (one is ancestor of the other)
+    if is_isogg_prefix_match(pred_norm, gt_norm):
+        return "prefix"
+
+    # Major clade match (same first letter)
+    pred_major = pred_norm[0] if pred_norm and pred_norm[0].isalpha() else ""
+    gt_major = gt_norm[0] if gt_norm and gt_norm[0].isalpha() else ""
+    if pred_major and pred_major == gt_major:
+        return "major_clade"
+
+    return "mismatch"
+
+
 def get_density_bin(density_pct: float) -> str:
     """Assign variant density percentage to bin."""
     if density_pct < 1.0:
@@ -159,6 +219,7 @@ class SampleInfo:
     reference: str = "grch37"
     ground_truth_terminal: str = ""  # AADR terminal mutation format
     ground_truth_isogg: str = ""  # AADR ISOGG format
+    variant_density: float = 0.0  # Variant density percentage (0-100)
 
 
 @dataclass
@@ -174,6 +235,27 @@ class HaplogroupCall:
 
 
 @dataclass
+class ISOGGMetrics:
+    """ISOGG nomenclature comparison metrics."""
+
+    total: int = 0
+    exact: int = 0
+    prefix: int = 0  # One is ancestor of other (compatible)
+    major_clade: int = 0  # Same major clade but different subclade
+    mismatch: int = 0  # Different major clades
+
+    @property
+    def compatible(self) -> int:
+        """Exact + prefix matches (phylogenetically compatible assignments)."""
+        return self.exact + self.prefix
+
+    @property
+    def compatible_rate(self) -> float:
+        """Percentage of compatible assignments."""
+        return 100 * self.compatible / self.total if self.total > 0 else 0.0
+
+
+@dataclass
 class ValidationResult:
     """Results from a validation run."""
 
@@ -186,6 +268,7 @@ class ValidationResult:
     runtime_seconds: float = 0.0
     calls: list[HaplogroupCall] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    isogg_metrics: ISOGGMetrics | None = None
 
     @property
     def accuracy(self) -> float:
@@ -284,6 +367,9 @@ def run_yallhap_ancient(
     calls: list[HaplogroupCall] = []
     start_time = time.time()
 
+    # Track ISOGG metrics if mapper available
+    isogg_metrics = ISOGGMetrics() if isogg_mapper else None
+
     for sample in samples:
         try:
             result = classifier.classify(sample.vcf_path, sample.vcf_sample_id)
@@ -298,6 +384,24 @@ def run_yallhap_ancient(
                     isogg_hg = isogg_mapper.to_isogg(result.haplogroup)
                     if isogg_hg:
                         extra["isogg_haplogroup"] = isogg_hg
+
+                        # Compare against ground truth ISOGG if available and density is sufficient
+                        if (
+                            isogg_metrics
+                            and sample.ground_truth_isogg
+                            and sample.ground_truth_isogg not in (".", "..", "NA", "n/a")
+                            and sample.variant_density >= ISOGG_MIN_DENSITY
+                        ):
+                            match = classify_isogg_match(isogg_hg, sample.ground_truth_isogg)
+                            isogg_metrics.total += 1
+                            if match == "exact":
+                                isogg_metrics.exact += 1
+                            elif match == "prefix":
+                                isogg_metrics.prefix += 1
+                            elif match == "major_clade":
+                                isogg_metrics.major_clade += 1
+                            else:
+                                isogg_metrics.mismatch += 1
                 except Exception:
                     pass
 
@@ -336,6 +440,7 @@ def run_yallhap_ancient(
         mean_confidence=mean_conf,
         runtime_seconds=runtime,
         calls=calls,
+        isogg_metrics=isogg_metrics,
     )
 
 
@@ -1367,6 +1472,23 @@ def generate_markdown_report(
 
         # Executive Summary
         f.write("## Executive Summary\n\n")
+
+        # Check if any result has ISOGG metrics
+        has_isogg = any(r.isogg_metrics and r.isogg_metrics.total > 0 for r in results)
+
+        if has_isogg:
+            f.write("| Dataset | Tool | Samples | Accuracy | ISOGG Compatible | Runtime |\n")
+            f.write("|---------|------|---------|----------|------------------|--------|\n")
+            for r in results:
+                acc = f"{r.accuracy:.1f}%" if r.correct_major > 0 else "N/A"
+                if r.isogg_metrics and r.isogg_metrics.total > 0:
+                    isogg = f"{r.isogg_metrics.compatible_rate:.1f}%"
+                else:
+                    isogg = "N/A"
+                f.write(
+                    f"| {r.dataset} | {r.tool} | {r.total_samples} | {acc} | {isogg} | {r.runtime_seconds:.1f}s |\n"
+                )
+        else:
         f.write("| Dataset | Tool | Samples | Accuracy | Runtime |\n")
         f.write("|---------|------|---------|----------|--------|\n")
         for r in results:
@@ -1375,6 +1497,10 @@ def generate_markdown_report(
                 f"| {r.dataset} | {r.tool} | {r.total_samples} | {acc} | {r.runtime_seconds:.1f}s |\n"
             )
         f.write("\n")
+
+        # ISOGG Legend if applicable
+        if has_isogg:
+            f.write("**ISOGG Compatible** = Exact matches + Prefix matches (one is ancestor of the other)\n\n")
 
         # Group results by dataset
         datasets: dict[str, list[ValidationResult]] = {}
