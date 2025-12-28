@@ -249,6 +249,7 @@ class HaplogroupClassifier:
         bayesian: bool = False,
         error_rate: float = 0.001,
         damage_rate: float = 0.1,
+        prior_type: str = "uniform",
     ):
         """
         Initialize classifier.
@@ -265,6 +266,7 @@ class HaplogroupClassifier:
             bayesian: Use Bayesian posterior calculation with AD support
             error_rate: Sequencing error rate for Bayesian mode
             damage_rate: Ancient DNA damage rate for Bayesian mode
+            prior_type: Prior type for Bayesian mode ("uniform" or "coalescent")
         """
         self.tree = tree
         self.snp_db = snp_db
@@ -277,6 +279,7 @@ class HaplogroupClassifier:
         self.bayesian = bayesian
         self.error_rate = error_rate
         self.damage_rate = damage_rate
+        self.prior_type = prior_type
 
         # Build position -> haplogroup mapping
         self._build_position_index()
@@ -292,6 +295,7 @@ class HaplogroupClassifier:
                 error_rate=error_rate,
                 damage_rate=damage_rate,
                 reference=reference,
+                prior_type=prior_type,  # type: ignore
             )
 
     def _build_position_index(self) -> None:
