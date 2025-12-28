@@ -8,30 +8,34 @@ yallHap is validated against three primary datasets:
 
 | Dataset | Samples | Reference | Type | Same Major Lineage |
 |---------|---------|-----------|------|-------------------|
-| 1000 Genomes Phase 3 | 1,233 males | GRCh37 | Modern WGS | **99.76%** (95% CI: 99.24-99.96%) |
-| AADR v54 (stratified) | 1,497 | GRCh37 | Ancient DNA | **79.4%** (95% CI: 77.3-81.4%) |
-| gnomAD HGDP/1000G | 200 | GRCh38 | High-coverage WGS | **100.00%** (95% CI: 98.17-100%) |
+| 1000 Genomes Phase 3 | 1,233 males | GRCh37 | Modern WGS | **99.8%** (95% CI: 99.2-99.9%) |
+| gnomAD HGDP/1000G | 1,231 | GRCh38 | High-coverage WGS | **99.9%** (95% CI: 99.5-100%) |
+| AADR v54 (full) | 7,333 | GRCh37 | Ancient DNA | **90.7%** Bayesian / **88.3%** Heuristic |
 
 Notes:
-- AADR accuracy is stratified by coverage: <0.1× (38%), 0.1-0.5× (75%), 0.5-1× (97%), ≥1× (99%), unknown (88%)
-- AADR samples are limited to 300 per coverage bin for balanced analysis
-- gnomAD samples are selected from the overlap with 1000 Genomes Phase 3, balanced by superpopulation
-- Both heuristic and Bayesian modes produce identical results on all datasets
+- AADR accuracy is stratified by **variant density** (% of called variants in chrY VCF):
+  - <1%: 33.7% Bayesian / 28.7% Heuristic (n=101)
+  - 1-10%: 58.4% Bayesian / 46.3% Heuristic (n=1,204)
+  - 10-50%: 97.8% Bayesian / 97.0% Heuristic (n=4,101)
+  - ≥50%: 99.0% Bayesian / 99.1% Heuristic (n=1,927)
+- Full AADR dataset used (no subsampling)
+- gnomAD samples are selected from the overlap with 1000 Genomes Phase 3 ground truth
+- **For ancient DNA, Bayesian mode is recommended for 4-10% variant density** (+12-24 pp improvement in that range)
 
 ## Benchmark Results Summary
 
-The following results were generated on 2025-12-26 using yallHap with 16 threads:
+The following results were generated on 2025-12-27 using yallHap v0.2.0 on Apple M3 Max (16 cores, 64GB RAM):
 
-| Dataset | Tool | Samples | Major Match | Exact | Confidence | SNPs |
-|---------|------|---------|-------------|-------|------------|------|
-| 1000G Phase 3 | yallHap | 1,233 | 99.76% | 8.84% | 0.994 | 15.4 |
-| 1000G Phase 3 | yallHap-Bayes | 1,233 | 99.76% | 8.84% | 0.994 | 15.4 |
-| AADR v54 (stratified) | yallHap | 1,497 | 79.43% | 0.00% | 0.980 | 10.0 |
-| AADR v54 (stratified) | yallHap-Bayes | 1,497 | 79.43% | 0.00% | 0.980 | 10.0 |
-| gnomAD HGDP/1KG | yallHap | 200 | 100.00% | 6.50% | 0.991 | 26.7 |
-| gnomAD HGDP/1KG | yallHap-Bayesian | 200 | 100.00% | 6.50% | 0.991 | 26.7 |
+| Dataset | Tool | Samples | Major Match | Confidence | Runtime |
+|---------|------|---------|-------------|------------|---------|
+| 1000G Phase 3 | yallHap | 1,233 | 99.8% | 0.994 | 314s |
+| 1000G Phase 3 | yallHap-Bayes | 1,233 | 99.8% | 0.994 | 314s |
+| gnomAD High-Cov | yallHap | 1,231 | 99.9% | 0.991 | 1,508s |
+| gnomAD High-Cov | yallHap-Bayes | 1,231 | 99.9% | 0.991 | 1,508s |
+| AADR v54 (full) | yallHap-Heuristic-TV | 7,333 | 88.3% | 0.983 | 1,367s |
+| AADR v54 (full) | yallHap-Bayesian-Ancient | 7,333 | 90.7% | 0.962 | 1,367s |
 
-**Key Finding**: Heuristic and Bayesian modes produce identical classifications on all validation datasets.
+**Key Finding**: For modern high-coverage samples, both modes produce identical results. For ancient DNA, **Bayesian ancient mode is recommended for samples with 4-10% variant density** (+12-24 pp improvement in that range). At very low (<4%) or high (>10%) densities, mode choice matters less.
 
 ## Quick Start
 
@@ -40,16 +44,25 @@ The following results were generated on 2025-12-26 using yallHap with 16 threads
 Download the pre-packaged validation data:
 
 ```bash
-# Download validation bundle (~10 GB with gnomAD data)
-wget https://zenodo.org/record/XXXXXX/files/yallhap-validation-v1.tar.gz
+# Download validation bundle (~700 MB, excludes full gnomAD VCF)
+wget https://zenodo.org/record/XXXXXX/files/yallhap-validation-v3.tar.gz
 
 # Verify checksum
-wget https://zenodo.org/record/XXXXXX/files/yallhap-validation-v1.md5
-md5sum -c yallhap-validation-v1.md5
+wget https://zenodo.org/record/XXXXXX/files/yallhap-validation-v3.md5
+md5sum -c yallhap-validation-v3.md5
 
 # Extract to data directory
-tar -xzf yallhap-validation-v1.tar.gz -C data/
+tar -xzf yallhap-validation-v3.tar.gz -C data/
 ```
+
+The Zenodo bundle includes:
+- Core reference data (YFull tree, YBrowse SNPs, ISOGG SNPs)
+- 1000 Genomes Phase 3 validation data
+- AADR v54 ancient DNA validation data
+- gnomAD pre-extracted diagnostic subset (not full 9GB VCF)
+- 9 ancient genome BAM/VCF files for tool comparison
+- T2T liftover chain files
+- Benchmark results and validation reports
 
 ### Option 2: Download from Original Sources
 
@@ -60,7 +73,7 @@ python scripts/download_1kg_validation.py
 # Ancient DNA data (requires AADR access)
 python scripts/download_ancient_test_data.py
 
-# gnomAD high-coverage data (GRCh38, ~9GB)
+# gnomAD high-coverage data (GRCh38, ~9GB full VCF)
 python scripts/download_gnomad_highcov.py
 
 # T2T liftover chains (optional)
@@ -89,6 +102,7 @@ After downloading, your `data/` directory should contain:
 data/
 ├── yfull_tree.json              # YFull phylogenetic tree (~14 MB)
 ├── ybrowse_snps.csv             # GRCh38 SNP database (~400 MB)
+├── isogg_snps_grch38.txt        # ISOGG SNP database (~3 MB)
 ├── validation/
 │   ├── 1kg_chrY_phase3.vcf.gz   # 1000 Genomes Y-chr VCF (5.4 MB)
 │   ├── 1kg_chrY_phase3.vcf.gz.tbi
@@ -98,12 +112,22 @@ data/
 ├── ancient/
 │   ├── aadr_chrY_v2.vcf.gz      # Ancient DNA VCF (97 MB)
 │   ├── aadr_chrY_v2.vcf.gz.tbi
-│   └── aadr_1240k_ground_truth.tsv  # Ancient ground truth (252 KB)
+│   ├── aadr_1240k_ground_truth.tsv  # Ancient ground truth
+│   └── aadr_variant_density.json    # Cached variant density
+├── ancient_genomes/             # Individual ancient samples for tool comparison
+│   ├── I0231.390k.chrY.{bam,vcf.gz}      # Yamnaya
+│   ├── I0443.390k.chrY.{bam,vcf.gz}      # Yamnaya
+│   ├── Kennewick_*.chrY.{bam,vcf.gz}     # Paleoamerican
+│   ├── SB524A_*.chrY.{bam,vcf.gz}        # Cheddar Man (lib 1)
+│   ├── SB524A2_*.chrY.{bam,vcf.gz}       # Cheddar Man (lib 2)
+│   ├── VK287.final.chrY.{bam,vcf.gz}     # Viking
+│   ├── VK292.final.chrY.{bam,vcf.gz}     # Viking
+│   ├── VK296.final.chrY.{bam,vcf.gz}     # Viking
+│   └── VK582.final.chrY.{bam,vcf.gz}     # Viking
 ├── validation_highcov/
 │   └── vcf/
 │       ├── gnomad.genomes.v3.1.2.hgdp_tgp.chrY.vcf.bgz  # Full VCF (~9 GB)
-│       ├── gnomad.genomes.v3.1.2.hgdp_tgp.chrY.vcf.bgz.tbi
-│       ├── gnomad_subset_10_filtered.vcf.gz  # Benchmark subset
+│       ├── gnomad_1kg_shared_diagnostic.vcf.gz  # Pre-extracted subset
 │       └── diagnostic_positions.tsv  # SNP positions for filtering
 └── liftover/
     ├── grch38-chm13v2.chain     # T2T liftover (6 MB)
@@ -117,20 +141,18 @@ data/
 Run the comprehensive benchmark suite exactly as used for the paper:
 
 ```bash
-# Full benchmark with 16 threads (recommended)
-python scripts/run_benchmarks.py --threads 16
+# Full benchmark with 12 threads (recommended)
+python scripts/run_benchmarks.py --threads 12
 
 # Quick development benchmark with subsampling
-python scripts/run_benchmarks.py --subsample 50 --threads 16
+python scripts/run_benchmarks.py --subsample 50 --threads 12
 ```
 
 This runs validation against all available datasets and generates:
 - Console summary table
-- `paper/benchmark_results.json` - Machine-readable results
-- `paper/benchmark_summary.tsv` - Summary table
-- `paper/benchmark_detailed.tsv` - Per-sample results
+- `results/benchmark_results.json` - Machine-readable results
 
-**Expected runtime:** ~30 minutes with 16 threads for full benchmark (both heuristic and Bayesian modes on all samples).
+**Expected runtime:** ~53 minutes with 12 threads for full benchmark on Apple M3 Max.
 
 ### 1000 Genomes Validation
 
@@ -146,8 +168,8 @@ python scripts/validate_1kg.py
 Classifying 1233 samples...
 
 Results:
-  Same major lineage: 1230/1233 (99.76%)
-  Wrong lineage: 3/1233 (0.24%)
+  Same major lineage: 1230/1233 (99.8%)
+  Wrong lineage: 3/1233 (0.2%)
   Exact match: 109/1233 (8.84%)
 
 Mean confidence: 0.994
@@ -156,57 +178,50 @@ Mean derived SNPs: 15.4
 Notes:
 - "Exact match" requires identical haplogroup names
 - Low exact match rate is expected due to different tree versions
-  (yallHap uses YFull 2024, ground truth uses ISOGG 2016)
+  (yallHap uses YFull 2025, ground truth uses ISOGG 2016)
 - "Same major lineage" means the first letter matches (R, J, I, etc.)
-- 3 wrong samples: 2 rare A0 haplogroups, 1 NO/K confusion
-```
-
-#### Quick Validation (100 samples)
-
-For faster testing during development:
-
-```python
-python << 'EOF'
-from yallhap.classifier import HaplogroupClassifier
-from yallhap.snps import SNPDatabase
-from yallhap.tree import Tree
-import csv
-
-tree = Tree.from_json('data/yfull_tree.json')
-db = SNPDatabase.from_ybrowse_gff_csv('data/validation/ybrowse_snps_hg19.csv')
-c = HaplogroupClassifier(tree=tree, snp_db=db, reference='grch37')
-
-# Load ground truth
-gt = {}
-with open('data/validation/poznik2016_haplogroups.tsv') as f:
-    for row in csv.DictReader(f, delimiter='\t'):
-        gt[row['sample_id']] = row['haplogroup']
-
-# Classify 100 samples
-samples = list(gt.keys())[:100]
-results = c.classify_batch('data/validation/1kg_chrY_phase3.vcf.gz', samples)
-
-# Check accuracy
-correct = sum(1 for i, s in enumerate(samples) if gt[s][0] == results[i].haplogroup[0])
-print(f"Accuracy: {correct}/100 ({correct}%) same major lineage")
-EOF
+- 3 wrong samples: 2 rare A0 haplogroups (YBrowse database issue), 1 NO/K confusion
 ```
 
 ### Ancient DNA Validation
 
 This validates yallHap against ancient samples from the Allen Ancient DNA Resource (AADR).
 
-**Important:** AADR ground truth uses mixed nomenclature - some samples have proper haplogroup names (e.g., "R-L21") while others have SNP-only names (e.g., "M458"). The benchmark script automatically filters to samples with proper X-YYYY format, then stratifies by coverage (300 samples per bin) for balanced analysis.
+**Important:** AADR samples are stratified by **variant density** (percentage of called variants in the chrY VCF), not by sequencing coverage metadata. This provides a more accurate measure of data quality directly from the VCF.
+
+#### Stratified Validation
 
 ```bash
-python scripts/validate_ancient.py
+# Run stratified validation with up to 500 samples per density bin
+python scripts/validate_aadr_stratified.py \
+  --samples-per-bin 500 \
+  --threads 12 \
+  -o results/aadr_density_stratified.md
 ```
 
-**Expected results (stratified by coverage):**
-- Same major lineage: 79.4% weighted (1,497 samples, 300 per bin)
-- Coverage-stratified: <0.1× (38%), 0.1-0.5× (75%), 0.5-1× (97%), ≥1× (99%), unknown (88%)
-- Mean derived SNPs: 10.0 (low coverage typical for aDNA)
-- Mean confidence: 0.98
+**Expected results (full dataset, by variant density):**
+
+| Density Bin | Samples | Heuristic TV | Bayesian Ancient | Δ |
+|-------------|---------|--------------|------------------|---|
+| <1% | 101 | 28.7% | 33.7% | +5.0 pp |
+| 1-10% | 1,204 | 46.3% | 58.4% | +12.1 pp |
+| 10-50% | 4,101 | 97.0% | 97.8% | +0.8 pp |
+| ≥50% | 1,927 | 99.1% | 99.0% | −0.1 pp |
+| **Overall** | **7,333** | **88.3%** | **90.7%** | **+2.4 pp** |
+
+Fine-grained analysis of the 1-10% range (see `results/aadr_1_10_pct_stratified_full.md`) shows Bayesian gains concentrated at 4-10% density (+12 to +24 pp).
+
+#### Decile Analysis
+
+For finer-grained analysis:
+
+```bash
+python scripts/validate_aadr_stratified.py \
+  --deciles \
+  --samples-per-bin 200 \
+  --threads 12 \
+  -o results/aadr_deciles.md
+```
 
 ### gnomAD High-Coverage Validation
 
@@ -228,123 +243,81 @@ python scripts/download_gnomad_highcov.py --sample-only
 - Samples: 4,151 (HGDP + 1000 Genomes high-coverage)
 - Key feature: AD (allelic depth) fields for Bayesian classification
 
-**Note:** The source index file may be outdated. The download script rebuilds the index locally using `tabix`.
+**Expected results:**
+- Same major lineage: 99.9% (1,231 samples with ground truth overlap)
+- 1 A0 misclassification (YBrowse database issue, same as 1KG)
+- High confidence (>0.99) with 20-30 derived SNPs per sample on average
 
-#### How gnomAD Samples Are Selected
+### Ancient Tool Comparison
 
-The benchmark script selects 200 samples (default, configurable via `--gnomad-samples N`) that:
-1. Exist in both gnomAD VCF AND 1000 Genomes Phase 3 ground truth
-2. Are balanced by superpopulation (AFR, AMR, EAS, EUR, SAS)
-
-This allows cross-reference validation using the well-established Poznik 2016 haplogroup assignments.
-
-#### Running gnomAD Validation
+Compare yallHap against yhaplo, Yleaf, and pathPhynder on the 9 ancient samples:
 
 ```bash
-# Quick test with 5 samples
-python << 'EOF'
-from yallhap.classifier import HaplogroupClassifier
-from yallhap.snps import SNPDatabase
-from yallhap.tree import Tree
-
-tree = Tree.from_json('data/yfull_tree.json')
-db = SNPDatabase.from_ybrowse_gff_csv('data/ybrowse_snps.csv')
-
-# Heuristic mode (default)
-c = HaplogroupClassifier(
-    tree=tree,
-    snp_db=db,
-    reference='grch38',
-    min_depth=1,
-)
-
-# Sample validation (first 5 from benchmark)
-samples = ["HG00096", "HG00101", "HG00103", "HG00105", "HG00107"]
-vcf = 'data/validation_highcov/vcf/gnomad_subset_10_filtered.vcf.gz'
-
-print("Sample       | yallHap         | Confidence | SNPs")
-print("-------------|-----------------|------------|-----")
-for sample in samples:
-    result = c.classify(vcf, sample)
-    print(f"{sample:12} | {result.haplogroup:15} | {result.confidence:.3f}      | {result.snp_stats.derived}")
-EOF
+python scripts/gather_validation_and_comparative_data.py \
+  -o results/validation_report_ancient_local.md \
+  --threads 12
 ```
 
-**Expected results:**
-- Same major lineage: 100% (200 validation samples, 95% CI: 98.17-100%)
-- All R haplogroups correctly identified as R-*
-- All I haplogroups correctly identified as I-*
-- High confidence (>0.99) with 20-30 derived SNPs per sample on average
+**Key findings from tool comparison:**
+- yhaplo misclassifies Kennewick Man (calls CT instead of Q)
+- Yleaf fails to produce calls for all 9 ancient samples
+- pathPhynder achieves deepest resolution but requires BAM input and is slower
+- yallHap Bayesian mode matches ground truth in 4/9 samples vs 1/9 for heuristic
+
+## ISOGG Output
+
+yallHap v0.2.0 supports ISOGG haplogroup nomenclature output:
+
+```bash
+# CLI usage
+yallhap classify --vcf sample.vcf.gz --isogg
+
+# Python API
+result = classifier.classify(vcf_path, sample_id)
+if result.isogg_haplogroup:
+    print(f"ISOGG: {result.isogg_haplogroup}")
+```
+
+## Ancient DNA Modes
+
+yallHap provides four approaches for ancient DNA:
+
+1. **Standard mode**: No special handling; suitable for well-preserved samples
+2. **Transversions-only mode** (`--transversions-only`): Excludes all transitions; strictest
+3. **Damage rescaling** (`--ancient --damage-rescale moderate`): Downweights transitions
+4. **Bayesian ancient mode** (`--ancient --bayesian`): Probabilistic scoring with adjusted error rates
+
+**Recommended for ancient DNA:** Use `--ancient --bayesian` for best accuracy.
 
 ## Understanding Results
 
 ### Major Lineage vs Exact Match
 
-yallHap uses the YFull 2024 tree, while many ground truth datasets use older ISOGG nomenclature. This causes low "exact match" rates even when classifications are correct.
+yallHap uses the YFull 2025 tree, while many ground truth datasets use older ISOGG nomenclature. This causes low "exact match" rates even when classifications are correct.
 
 **Example:**
 - Ground truth: `R1b1a1a2a1a2c` (ISOGG 2016)
-- yallHap call: `R-L21` (YFull 2024)
+- yallHap call: `R-L21` (YFull 2025)
 - These represent the **same haplogroup** with different naming conventions
-
-**What to check:**
-1. **Same major lineage** (first letter): This should be very high (>99%)
-2. **Phylogenetic consistency**: The called haplogroup should be on the correct branch
-3. **Specificity**: yallHap may call a more or less specific haplogroup depending on coverage
-
-### Interpreting Low Accuracy
-
-If you see low accuracy:
-
-1. **Check reference genome**: Ensure VCF reference matches `--reference` flag
-2. **Check sample names**: Sample IDs must match between VCF and ground truth
-3. **Check coverage**: Low-coverage samples may get less specific calls
-4. **Check for damage**: Ancient DNA samples need `--ancient` or `--transversions-only`
 
 ### Heuristic vs Bayesian Mode
 
-| Mode | Use Case | AD Required | Accuracy | Default |
-|------|----------|-------------|----------|---------|
-| Heuristic | General use | No | 99.76% (1KG) | Yes |
-| Bayesian | Research | Optional | 99.76% (1KG) | No |
+| Mode | Use Case | AD Required | Modern Accuracy | Ancient Accuracy |
+|------|----------|-------------|-----------------|------------------|
+| Heuristic | General use | No | 99.8% (1KG) | 88.3% (AADR) |
+| Bayesian | Research, ancient DNA | Optional | 99.8% (1KG) | **90.7%** (AADR) |
 
-**Key finding from validation:** Both modes produce identical results on all tested datasets. Bayesian mode is experimental and disabled by default.
+**Key finding:** For modern samples, both modes produce identical results. For ancient DNA, Bayesian mode provides +2.4 pp improvement overall, with the largest gains at 4-10% variant density (+12-24 pp). At <4% or >10% density, mode choice matters less.
 
-## Adding New Validation Sets
+### Variant Density Metric
 
-### Creating Ground Truth Files
-
-Ground truth files should be TSV format with at least these columns:
+Variant density is calculated as:
 
 ```
-sample_id	haplogroup
-SAMPLE1	R-L21
-SAMPLE2	J-M172
-SAMPLE3	I-M253
+variant_density = (called_variants / total_variants_in_VCF) × 100%
 ```
 
-### Running Custom Validation
-
-```python
-from yallhap.validation import ValidationRunner, load_ground_truth
-
-# Load your ground truth
-ground_truth = load_ground_truth("my_ground_truth.tsv")
-
-# Run validation
-runner = ValidationRunner(
-    tree_path="data/yfull_tree.json",
-    snp_db_path="data/ybrowse_snps.csv",
-    vcf_path="my_samples.vcf.gz",
-    reference="grch38",
-)
-
-results = runner.run(ground_truth)
-
-# Print metrics
-print(f"Exact match: {results.exact_match_rate:.1%}")
-print(f"Same lineage: {results.same_lineage_rate:.1%}")
-```
+This is computed directly from the chrY VCF and cached in `data/ancient/aadr_variant_density.json` for efficiency. It provides a more reliable stratification metric than coverage metadata, which is only available for a subset of AADR samples.
 
 ## Validation Scripts Reference
 
@@ -355,8 +328,8 @@ print(f"Same lineage: {results.same_lineage_rate:.1%}")
 | `scripts/download_gnomad_highcov.py` | Downloads gnomAD HGDP/1KG high-coverage VCF |
 | `scripts/download_liftover_chains.py` | Downloads T2T liftover chain files |
 | `scripts/run_benchmarks.py` | Runs comprehensive benchmark suite |
-| `scripts/validate_1kg.py` | Runs validation against 1000 Genomes |
-| `scripts/eigenstrat_to_vcf.py` | Converts EIGENSTRAT format to VCF |
+| `scripts/validate_aadr_stratified.py` | AADR validation with variant density stratification |
+| `scripts/gather_validation_and_comparative_data.py` | Multi-tool comparison on ancient samples |
 | `scripts/prep_for_zenodo.py` | Packages validation data for Zenodo upload |
 
 ## Troubleshooting
@@ -385,32 +358,22 @@ bcftools query -l sample.vcf.gz
 
 ### Low accuracy on ancient samples
 
-Try different ancient DNA modes:
+Use Bayesian ancient mode for best results:
 
 ```python
-# Start with transversions-only (strictest)
-classifier = HaplogroupClassifier(..., transversions_only=True)
-
-# If too few variants, try damage rescaling instead
-classifier = HaplogroupClassifier(..., ancient_mode=True, damage_rescale="moderate")
+classifier = HaplogroupClassifier(
+    tree=tree,
+    snp_db=snp_db,
+    reference="grch37",
+    bayesian=True,
+    ancient_mode=True,
+)
 ```
 
-### Slow classification on multi-sample VCF
-
-For large multi-sample VCFs (like gnomAD with 4,151 samples), the benchmark script automatically:
-1. Creates a diagnostic positions file (`diagnostic_positions.tsv`)
-2. Uses bcftools to extract only relevant positions and samples
-3. Creates a cached subset VCF for faster subsequent runs
-
-If you need to manually extract:
+Or via CLI:
 
 ```bash
-# Extract single sample
-bcftools view -s HG00096 input.vcf.gz -Oz -o HG00096.vcf.gz
-tabix HG00096.vcf.gz
-
-# Then classify
-yallhap classify --vcf HG00096.vcf.gz
+yallhap classify --vcf ancient.vcf.gz --ancient --bayesian
 ```
 
 ### gnomAD index file outdated
@@ -431,13 +394,19 @@ python scripts/download_1kg_validation.py
 python scripts/download_ancient_test_data.py
 python scripts/download_gnomad_highcov.py
 
-# 2. Run full benchmarks with 16 threads
-python scripts/run_benchmarks.py --threads 16
+# 2. Run full benchmarks with 12 threads
+python scripts/run_benchmarks.py --threads 12
 
-# 3. Check results match paper
-cat paper/benchmark_results.json
+# 3. Run AADR stratified validation
+python scripts/validate_aadr_stratified.py \
+  --samples-per-bin 500 \
+  --threads 12 \
+  -o results/aadr_density_stratified.md
+
+# 4. Check results match paper
+cat results/benchmark_results.json
 ```
 
 Expected file outputs:
-- `paper/benchmark_results.json` - Full machine-readable results
-- `paper/benchmark_summary.tsv` - Summary table matching paper Table 2
+- `results/benchmark_results.json` - Full machine-readable results
+- `results/aadr_density_stratified.md` - Stratified AADR results matching Table 3
