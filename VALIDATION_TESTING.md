@@ -21,6 +21,7 @@ Notes:
 - Full AADR dataset used (no subsampling)
 - gnomAD samples are selected from the overlap with 1000 Genomes Phase 3 ground truth
 - **For ancient DNA, Bayesian mode is recommended for 4-10% variant density** (+12-24 pp improvement in that range)
+- **ISOGG nomenclature output**: 96.3% compatible rate on 6,750 AADR samples with ≥4% variant density (see ISOGG Validation section below)
 
 ## Benchmark Results Summary
 
@@ -263,6 +264,51 @@ python scripts/gather_validation_and_comparative_data.py \
 - Yleaf fails to produce calls for all 9 ancient samples
 - pathPhynder achieves deepest resolution but requires BAM input and is slower
 - yallHap Bayesian mode matches ground truth in 4/9 samples vs 1/9 for heuristic
+
+## ISOGG Validation
+
+The ISOGG nomenclature mapping was validated on AADR samples with published ISOGG haplogroup annotations.
+
+### Validation Results (6,750 samples with ≥4% variant density)
+
+| Metric | Count | Percentage |
+|--------|-------|------------|
+| Exact match | 1,358 | 20.1% |
+| Prefix match | 5,143 | 76.2% |
+| Major clade match | 101 | 1.5% |
+| Mismatch | 148 | 2.2% |
+| **Compatible (exact + prefix)** | **6,501** | **96.3%** |
+
+**Match Type Definitions:**
+- **Exact match**: Normalized ISOGG strings are identical
+- **Prefix match**: One is a prefix of the other (e.g., R1b vs R1b1a1b1a1a)
+- **Major clade match**: Same first letter but different subclades (e.g., R1a vs R1b)
+- **Mismatch**: Different major clades (e.g., I2 vs R1b)
+
+### Mismatch Analysis
+
+The 148 mismatches (2.2%) fall into two main categories:
+
+1. **Ancestral stops not captured by string prefix matching** (~45 samples):
+   - H→F (17): F is ancestral to GHIJK; phylogenetically correct
+   - Q→P (16): P is ancestral to QR; phylogenetically correct
+   - R→P (12): P is ancestral to R; phylogenetically correct
+
+2. **Cross-clade conflicts** (~100 samples):
+   - I→O (10), I→R (7), S→R (6), R→I (5), Q→R (5), etc.
+   - These likely reflect ground truth errors, low-confidence calls, or ISOGG database gaps
+
+**Key Insight**: Many "mismatches" are phylogenetically correct because ISOGG string matching doesn't recognize that F is ancestral to H, or P is ancestral to Q/R.
+
+### Running ISOGG Validation
+
+```bash
+# Full validation with ≥4% density filter (default)
+python scripts/validate_isogg.py --threads 12
+
+# Without density filter (includes low-coverage samples)
+python scripts/validate_isogg.py --no-density-filter --threads 12
+```
 
 ## ISOGG Output
 

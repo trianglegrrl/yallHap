@@ -46,7 +46,8 @@ class ISOGGDatabase:
 
     def __init__(self) -> None:
         """Initialize empty database."""
-        self._snps_by_name: dict[str, ISOGGSNP] = {}
+        # Store all SNPs with same name (some SNPs map to multiple haplogroups)
+        self._snps_by_name: dict[str, list[ISOGGSNP]] = {}
         self._snps_by_position: dict[int, list[ISOGGSNP]] = {}
         self._haplogroups: set[str] = set()
 
@@ -97,15 +98,22 @@ class ISOGGDatabase:
 
     def _add_snp(self, snp: ISOGGSNP) -> None:
         """Add a SNP to the database."""
-        self._snps_by_name[snp.name] = snp
+        if snp.name not in self._snps_by_name:
+            self._snps_by_name[snp.name] = []
+        self._snps_by_name[snp.name].append(snp)
         if snp.position not in self._snps_by_position:
             self._snps_by_position[snp.position] = []
         self._snps_by_position[snp.position].append(snp)
         self._haplogroups.add(snp.haplogroup)
 
     def get_by_name(self, name: str) -> ISOGGSNP | None:
-        """Get SNP by name."""
-        return self._snps_by_name.get(name)
+        """Get first SNP by name."""
+        snps = self._snps_by_name.get(name, [])
+        return snps[0] if snps else None
+
+    def get_all_by_name(self, name: str) -> list[ISOGGSNP]:
+        """Get all SNPs with given name (for recurrent mutations)."""
+        return self._snps_by_name.get(name, [])
 
     def get_by_position(self, position: int) -> ISOGGSNP | None:
         """Get first SNP at position."""
@@ -128,17 +136,19 @@ class ISOGGDatabase:
     def get_snp_counts_by_haplogroup(self) -> dict[str, int]:
         """Get count of SNPs per haplogroup."""
         counts: dict[str, int] = {}
-        for snp in self._snps_by_name.values():
+        for snp_list in self._snps_by_name.values():
+            for snp in snp_list:
             counts[snp.haplogroup] = counts.get(snp.haplogroup, 0) + 1
         return counts
 
     def __len__(self) -> int:
-        """Return number of SNPs in database."""
-        return len(self._snps_by_name)
+        """Return total number of SNP entries in database."""
+        return sum(len(snps) for snps in self._snps_by_name.values())
 
     def __iter__(self) -> Iterator[ISOGGSNP]:
         """Iterate over all SNPs."""
-        return iter(self._snps_by_name.values())
+        for snp_list in self._snps_by_name.values():
+            yield from snp_list
 
     def __contains__(self, name: str) -> bool:
         """Check if SNP name is in database."""
@@ -149,8 +159,15 @@ class ISOGGMapper:
     """
     Maps YFull haplogroup names to ISOGG nomenclature.
 
-    Uses SNP database to find the most specific ISOGG equivalent for
-    YFull haplogroups based on the SNPs that define them.
+    The join between YFull and ISOGG is on SNP name:
+    - YFull uses format "X-SNP" (e.g., "R-L21")
+    - ISOGG uses hierarchical names but each is defined by a SNP
+
+    Algorithm:
+    1. Parse the defining SNP from YFull name
+    2. Look up that SNP in ISOGG database
+    3. If not found, walk UP the YFull tree trying each ancestor's SNP
+    4. Return the first ISOGG match (rollup to nearest ancestor with ISOGG entry)
     """
 
     def __init__(self, tree: Tree, isogg_db: ISOGGDatabase) -> None:
@@ -165,115 +182,214 @@ class ISOGGMapper:
         self.isogg_db = isogg_db
 
         # Build mapping from SNP name to ISOGG haplogroup
-        self._snp_to_isogg: dict[str, str] = {}
+        # Note: same SNP may appear multiple times with different haplogroups
+        # (recurrent mutations or database errors)
+        # We keep ALL mappings and choose based on context when looking up
+        self._snp_to_isogg_all: dict[str, list[str]] = {}
         for snp in isogg_db:
-            self._snp_to_isogg[snp.name] = snp.haplogroup
+            if snp.name not in self._snp_to_isogg_all:
+                self._snp_to_isogg_all[snp.name] = []
+            self._snp_to_isogg_all[snp.name].append(snp.haplogroup)
 
-        # Build sorted list of ISOGG haplogroups (longer = more specific)
-        self._isogg_hgs_by_length = sorted(
-            isogg_db.get_all_haplogroups(),
-            key=len,
-            reverse=True,
-        )
+        # Set of valid ISOGG haplogroup names (for direct name matching)
+        self._isogg_hgs = set(isogg_db.get_all_haplogroups())
 
-        # Pre-build YFull to ISOGG mapping using tree structure
+        # Pre-build YFull to ISOGG mapping
         self._yfull_to_isogg: dict[str, str] = {}
         self._build_mapping()
 
-    def _build_mapping(self) -> None:
-        """Build YFull to ISOGG haplogroup mapping using SNP names and tree."""
-        isogg_hgs = set(self.isogg_db.get_all_haplogroups())
-
-        for node in self.tree.iter_depth_first():
-            yfull_name = node.name
-            isogg_match = self._find_isogg_for_node(node, isogg_hgs)
-            if isogg_match:
-                self._yfull_to_isogg[yfull_name] = isogg_match
-
-    def _find_isogg_for_node(self, node: Node, isogg_hgs: set[str]) -> str | None:  # noqa: F821
+    def _parse_snps_from_node(self, node_name: str, node_snps: list[str]) -> list[str]:
         """
-        Find the most specific ISOGG haplogroup for a tree node.
+        Extract all individual SNP names from a node.
 
-        Strategy:
-        1. Check if the node's defining SNPs are in the ISOGG database
-        2. Walk up the tree and collect all defining SNPs
-        3. Find the most specific (longest) ISOGG haplogroup from those SNPs
+        YFull tree has SNPs in multiple formats:
+        - In the name: "R-L21" -> extract "L21"
+        - In snps list: may be comma-separated like "FGC79428, Z2665"
+
+        Args:
+            node_name: The node's haplogroup name
+            node_snps: The node's snps list
+
+        Returns:
+            List of individual SNP names
         """
-        # Check if this node or its ancestors have defining SNPs in ISOGG
+        snps: list[str] = []
+
+        # Extract SNP from name (e.g., "R-L21" -> "L21")
+        if "-" in node_name:
+            snp_from_name = node_name.split("-", 1)[1]
+            snps.append(snp_from_name)
+
+        # Parse snps list, splitting on commas
+        for snp_entry in node_snps:
+            # Split on comma and clean up
+            for part in snp_entry.split(","):
+                part = part.strip()
+                if part:
+                    # Also split on "/" (YFull uses this too)
+                    for subpart in part.split("/"):
+                        subpart = subpart.strip()
+                        if subpart:
+                            snps.append(subpart)
+
+        return snps
+
+    def _get_isogg_for_snp(self, snp: str, major_clade_hint: str | None = None) -> str | None:
+        """
+        Get ISOGG haplogroup for a single SNP.
+
+        When a SNP maps to multiple haplogroups (recurrent mutation),
+        prefer the one matching the major clade hint, or the shorter one.
+
+        Args:
+            snp: SNP name to look up
+            major_clade_hint: Preferred major clade (e.g., "I" for I-L596)
+
+        Returns:
+            ISOGG haplogroup, or None if not found
+        """
+        if snp not in self._snp_to_isogg_all:
+            return None
+
+        candidates = self._snp_to_isogg_all[snp]
+        if len(candidates) == 1:
+            return candidates[0]
+
+        # Multiple candidates - need to choose
+        if major_clade_hint:
+            # Prefer candidate matching the major clade
+            for hg in candidates:
+                if hg and hg[0].upper() == major_clade_hint[0].upper():
+                    return hg
+
+        # Fall back to shortest (most ancestral)
+        return min(candidates, key=len)
+
+    def _find_isogg_for_node_snps(
+        self, snps: list[str], major_clade_hint: str | None = None
+    ) -> str | None:
+        """
+        Find ISOGG haplogroup from a list of SNPs.
+
+        Returns the most specific (longest) ISOGG haplogroup that matches
+        any of the provided SNPs, with preference for matching major clade.
+
+        Args:
+            snps: List of SNP names to check
+            major_clade_hint: Preferred major clade for disambiguation
+
+        Returns:
+            Most specific ISOGG haplogroup, or None if no match
+        """
         best_isogg: str | None = None
         best_length = 0
 
-        # Walk from this node to root, collecting ISOGG haplogroups
-        current_name: str | None = node.name
+        for snp in snps:
+            isogg_hg = self._get_isogg_for_snp(snp, major_clade_hint)
+            if isogg_hg and len(isogg_hg) > best_length:
+                best_isogg = isogg_hg
+                best_length = len(isogg_hg)
+
+        return best_isogg
+
+    def _build_mapping(self) -> None:
+        """
+        Build YFull to ISOGG haplogroup mapping.
+
+        For each YFull node:
+        1. Try to find ISOGG match from the node's own SNPs
+        2. If not found, walk up to ancestors until a match is found
+        """
+        for node in self.tree.iter_depth_first():
+            isogg_match = self._find_isogg_for_yfull(node.name)
+            if isogg_match:
+                self._yfull_to_isogg[node.name] = isogg_match
+
+    def _find_isogg_for_yfull(self, yfull_name: str) -> str | None:
+        """
+        Find ISOGG haplogroup for a YFull haplogroup name.
+
+        Strategy:
+        1. Check if the node's name is directly in ISOGG (e.g., "I2")
+        2. Parse SNPs from the node and look them up
+        3. If no match, walk up to parent and repeat
+        4. Return the first match found (rollup)
+
+        Args:
+            yfull_name: YFull haplogroup name
+
+        Returns:
+            ISOGG haplogroup, or None if no mapping exists
+        """
+        # Extract major clade hint from the original name
+        # E.g., "I-L596" -> "I", "R1b" -> "R"
+        major_clade = yfull_name.split("-")[0] if "-" in yfull_name else yfull_name
+        if major_clade:
+            major_clade = major_clade[0].upper()
+
+        current_name: str | None = yfull_name
+
         while current_name is not None:
             try:
                 current = self.tree.get(current_name)
             except KeyError:
                 break
 
-            # Check the node's defining SNPs
-            for snp_name in current.snps:
-                if snp_name in self._snp_to_isogg:
-                    isogg_hg = self._snp_to_isogg[snp_name]
-                    if len(isogg_hg) > best_length:
-                        best_isogg = isogg_hg
-                        best_length = len(isogg_hg)
-
-            # Extract SNP name from YFull format (e.g., "R-L21" -> "L21")
-            if "-" in current.name:
-                snp_name = current.name.split("-", 1)[1]
-                if snp_name in self._snp_to_isogg:
-                    isogg_hg = self._snp_to_isogg[snp_name]
-                    if len(isogg_hg) > best_length:
-                        best_isogg = isogg_hg
-                        best_length = len(isogg_hg)
-
-            # Also check if the full name or base matches
-            if current.name in isogg_hgs:
-                if len(current.name) > best_length:
-                    best_isogg = current.name
-                    best_length = len(current.name)
-
-            # Check base haplogroup (before hyphen)
+            # Check if the base name is directly an ISOGG haplogroup
             base = current.name.split("-")[0] if "-" in current.name else current.name
-            if base in isogg_hgs:
-                if len(base) > best_length:
-                    best_isogg = base
-                    best_length = len(base)
+            if base in self._isogg_hgs:
+                return base
 
-            # Move to parent
+            # Parse all SNPs from this node
+            snps = self._parse_snps_from_node(current.name, current.snps)
+
+            # Look up SNPs in ISOGG with major clade hint for disambiguation
+            isogg_match = self._find_isogg_for_node_snps(snps, major_clade)
+            if isogg_match:
+                return isogg_match
+
+            # Walk up to parent
             current_name = current.parent_name
 
-        return best_isogg
+        return None
 
     def to_isogg(self, yfull_haplogroup: str) -> str:
         """
         Convert YFull haplogroup to ISOGG nomenclature.
 
         Args:
-            yfull_haplogroup: YFull haplogroup name
+            yfull_haplogroup: YFull haplogroup name (e.g., "R-L21", "I2")
 
         Returns:
-            ISOGG haplogroup name, or original if no mapping exists
+            ISOGG haplogroup name (e.g., "R1b1a1b1a1a2c", "I2")
+            Returns original if no mapping exists
         """
-        # Priority 1: Direct SNP lookup (most reliable)
+        # Extract major clade hint for disambiguation
+        major_clade = (
+            yfull_haplogroup.split("-")[0][0].upper()
+            if yfull_haplogroup
+            else None
+        )
+
+        # Priority 1: Direct SNP lookup from name
         # YFull format is "LETTER-SNP" (e.g., "R-L21", "I-M438")
         if "-" in yfull_haplogroup:
             snp_name = yfull_haplogroup.split("-", 1)[1]
-            if snp_name in self._snp_to_isogg:
-                return self._snp_to_isogg[snp_name]
+            isogg = self._get_isogg_for_snp(snp_name, major_clade)
+            if isogg:
+                return isogg
 
-        # Priority 2: Pre-built mapping from tree traversal
+        # Priority 2: Check if base name is directly an ISOGG haplogroup
+        base = yfull_haplogroup.split("-")[0] if "-" in yfull_haplogroup else yfull_haplogroup
+        if base in self._isogg_hgs:
+            return base
+
+        # Priority 3: Pre-built mapping (includes rollup to ancestors)
         if yfull_haplogroup in self._yfull_to_isogg:
             return self._yfull_to_isogg[yfull_haplogroup]
 
-        # Priority 3: Base haplogroup letter if it's in ISOGG
-        base = yfull_haplogroup.split("-")[0] if "-" in yfull_haplogroup else yfull_haplogroup
-        isogg_hgs = set(self.isogg_db.get_all_haplogroups())
-        if base in isogg_hgs:
-            return base
-
-        return yfull_haplogroup
+        # No mapping found, return original with tilde to indicate uncertainty
+        return f"{yfull_haplogroup}~"
 
     def to_isogg_from_snps(self, derived_snp_names: list[str]) -> str | None:
         """
@@ -288,17 +404,7 @@ class ISOGGMapper:
         Returns:
             Most specific ISOGG haplogroup, or None if no matches
         """
-        best_isogg: str | None = None
-        best_length = 0
-
-        for snp_name in derived_snp_names:
-            if snp_name in self._snp_to_isogg:
-                isogg_hg = self._snp_to_isogg[snp_name]
-                if len(isogg_hg) > best_length:
-                    best_isogg = isogg_hg
-                    best_length = len(isogg_hg)
-
-        return best_isogg
+        return self._find_isogg_for_node_snps(derived_snp_names)
 
     def from_isogg(self, isogg_haplogroup: str) -> str | None:
         """

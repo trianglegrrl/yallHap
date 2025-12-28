@@ -10,8 +10,8 @@ Usage:
     python scripts/prep_for_zenodo.py
 
 Output:
-    - yallhap-validation-v3.tar.gz  (~650 MB)
-    - yallhap-validation-v3.md5
+    - yallhap-validation-v4.tar.gz  (~650 MB)
+    - yallhap-validation-v4.md5
 
 Files included:
     Core reference data:
@@ -67,7 +67,7 @@ import tarfile
 from pathlib import Path
 
 # Version for the validation bundle
-VERSION = "v3"
+VERSION = "v4"
 
 # Ancient genome samples for tool comparison
 ANCIENT_SAMPLES = [
@@ -119,8 +119,16 @@ for sample in ANCIENT_SAMPLES:
 
 # Results files to include (relative to project root)
 # Note: All results/*.md files are included dynamically
+# Note: results/validation_temp/ is excluded (temporary tool outputs)
 RESULTS_FILES = [
     "results/benchmark_results.json",
+    "results/coalescent_prior_comparison.json",
+    "results/isogg_mismatch_analysis.json",
+    "results/isogg_mismatches_detailed.json",
+    "results/isogg_validation_full.json",
+    "results/isogg_validation.json",
+    "results/power_analysis_ancient.json",
+    "results/significance_tests.json",
 ]
 
 # Validation scripts to include for reproducibility (relative to project root)
@@ -132,11 +140,21 @@ VALIDATION_SCRIPTS = [
     "scripts/download_gnomad_highcov.py",
     "scripts/download_liftover_chains.py",
     "scripts/download_yfull_tree.py",
-    # Validation runners
+    # Core validation runners
     "scripts/run_benchmarks.py",
     "scripts/validate_1kg.py",
     "scripts/validate_aadr_stratified.py",
     "scripts/gather_validation_and_comparative_data.py",
+    # ISOGG validation
+    "scripts/validate_isogg.py",
+    "scripts/analyze_isogg_mismatches.py",
+    "scripts/generate_isogg_mismatch_table.py",
+    # Statistical analysis
+    "scripts/power_analysis_ancient.py",
+    "scripts/calculate_significance.py",
+    "scripts/test_coalescent_priors.py",
+    # Asset generation
+    "scripts/generate_assets.py",
     # Bundle creation (this script)
     "scripts/prep_for_zenodo.py",
 ]

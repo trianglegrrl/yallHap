@@ -130,8 +130,8 @@ class TestISOGGMapper:
         # Should return some ISOGG-style haplogroup or the original if no mapping
         assert result is not None
 
-    def test_unmapped_returns_original(self, sample_isogg_file: Path) -> None:
-        """YFull nodes without ISOGG match return original name."""
+    def test_unmapped_returns_original_with_tilde(self, sample_isogg_file: Path) -> None:
+        """YFull nodes without ISOGG match return original name with tilde."""
         from yallhap.isogg import ISOGGDatabase, ISOGGMapper
         from yallhap.tree import Tree
 
@@ -144,9 +144,50 @@ class TestISOGGMapper:
         db = ISOGGDatabase.from_file(sample_isogg_file)
         mapper = ISOGGMapper(tree, db)
 
-        # Unknown haplogroup returns original
+        # Unknown haplogroup returns original with tilde
         result = mapper.to_isogg("R-XYZ123")
-        assert result == "R-XYZ123"
+        assert result == "R-XYZ123~"
+
+    def test_multi_haplogroup_snp_prefers_matching_clade(
+        self, sample_isogg_file: Path
+    ) -> None:
+        """When SNP maps to multiple haplogroups, prefers one matching major clade."""
+        from yallhap.isogg import ISOGGDatabase, ISOGGMapper
+        from yallhap.tree import Tree
+
+        # L596 maps to both I2a2 and N1a1a1a1a1a6~ in sample file
+        tree_dict = {
+            'ROOT (Y-Chromosome "Adam")': ["I"],
+            "I": ["I2"],
+            "I2": ["I-L596"],
+        }
+        tree = Tree.from_dict(tree_dict)
+
+        db = ISOGGDatabase.from_file(sample_isogg_file)
+        mapper = ISOGGMapper(tree, db)
+
+        # I-L596 should map to I2a2 (matches I major clade), not N1a1a1a1a1a6~
+        result = mapper.to_isogg("I-L596")
+        assert result == "I2a2"
+
+    def test_multi_haplogroup_snp_n_clade(self, sample_isogg_file: Path) -> None:
+        """Multi-haplogroup SNP chooses N when that's the major clade."""
+        from yallhap.isogg import ISOGGDatabase, ISOGGMapper
+        from yallhap.tree import Tree
+
+        # Same L596 SNP but from N context
+        tree_dict = {
+            'ROOT (Y-Chromosome "Adam")': ["N"],
+            "N": ["N-L596"],
+        }
+        tree = Tree.from_dict(tree_dict)
+
+        db = ISOGGDatabase.from_file(sample_isogg_file)
+        mapper = ISOGGMapper(tree, db)
+
+        # N-L596 should map to N1a1a1a1a1a6~ (matches N major clade)
+        result = mapper.to_isogg("N-L596")
+        assert result == "N1a1a1a1a1a6~"
 
     def test_get_isogg_haplogroups_at_position(self, sample_isogg_file: Path) -> None:
         """Can get all ISOGG haplogroups that have SNPs at a position."""
@@ -243,6 +284,62 @@ class TestISOGGMapper:
         # Should return I2 or a more specific I2 haplogroup
         assert result is not None
         assert "I2" in result or result.startswith("I2")
+
+    def test_direct_snp_lookup_uses_major_clade_hint(
+        self, sample_isogg_file: Path
+    ) -> None:
+        """Direct SNP lookup in to_isogg uses major clade from YFull name."""
+        from yallhap.isogg import ISOGGDatabase, ISOGGMapper
+        from yallhap.tree import Tree
+
+        tree_dict = {'ROOT (Y-Chromosome "Adam")': []}
+        tree = Tree.from_dict(tree_dict)
+
+        db = ISOGGDatabase.from_file(sample_isogg_file)
+        mapper = ISOGGMapper(tree, db)
+
+        # M253 is I1-defining SNP
+        result = mapper.to_isogg("I-M253")
+        assert result == "I1"
+
+        # M269 is R1b1a1b-defining SNP
+        result = mapper.to_isogg("R-M269")
+        assert result == "R1b1a1b"
+
+
+class TestISOGGDatabaseMultiHaplogroup:
+    """Tests for ISOGG database handling of multi-haplogroup SNPs."""
+
+    def test_get_all_by_name_returns_multiple(self, sample_isogg_file: Path) -> None:
+        """get_all_by_name returns all haplogroups for recurrent SNPs."""
+        from yallhap.isogg import ISOGGDatabase
+
+        db = ISOGGDatabase.from_file(sample_isogg_file)
+        # L596 is in both I2a2 and N1a1a1a1a1a6~
+        snps = db.get_all_by_name("L596")
+        assert len(snps) == 2
+        haplogroups = {s.haplogroup for s in snps}
+        assert "I2a2" in haplogroups
+        assert "N1a1a1a1a1a6~" in haplogroups
+
+    def test_get_by_name_returns_first(self, sample_isogg_file: Path) -> None:
+        """get_by_name returns first SNP for multi-haplogroup entries."""
+        from yallhap.isogg import ISOGGDatabase
+
+        db = ISOGGDatabase.from_file(sample_isogg_file)
+        snp = db.get_by_name("L596")
+        assert snp is not None
+        # Returns first one encountered
+        assert snp.haplogroup in ("I2a2", "N1a1a1a1a1a6~")
+
+    def test_len_counts_all_entries(self, sample_isogg_file: Path) -> None:
+        """len() counts all SNP entries including duplicates."""
+        from yallhap.isogg import ISOGGDatabase
+
+        db = ISOGGDatabase.from_file(sample_isogg_file)
+        # Should count L596 twice (once for each haplogroup)
+        total = len(db)
+        assert total > 100  # Sample file has ~100+ entries
 
 
 class TestISOGGHaplogroups:

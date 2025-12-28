@@ -1,6 +1,6 @@
 # yallHap Validation Data Bundle
 
-**Version:** v3
+**Version:** v4
 **DOI:** [To be assigned upon Zenodo upload]
 
 This archive contains all data required to reproduce yallHap validation benchmarks and results published in the accompanying paper.
@@ -9,7 +9,7 @@ This archive contains all data required to reproduce yallHap validation benchmar
 
 ```bash
 # Extract archive
-tar -xzf yallhap-validation-v3.tar.gz
+tar -xzf yallhap-validation-v4.tar.gz
 
 # Copy data to yallHap data directory
 cp -r yfull_tree.json ybrowse_snps.csv isogg_snps_grch38.txt /path/to/yallhap/data/
@@ -96,13 +96,21 @@ Each sample includes:
 
 ### Benchmark Results
 
-Pre-computed results from running `scripts/run_benchmarks.py`.
+Pre-computed results from running validation scripts.
 
 | File | Description |
 |------|-------------|
 | `results/benchmark_results.json` | Machine-readable benchmark results |
+| `results/coalescent_prior_comparison.json` | Uniform vs coalescent prior comparison (200 samples) |
+| `results/isogg_validation.json` | ISOGG mapping validation summary |
+| `results/isogg_validation_full.json` | Detailed ISOGG validation per-sample results |
+| `results/isogg_mismatch_analysis.json` | Categorized ISOGG mismatch analysis |
+| `results/isogg_mismatches_detailed.json` | Complete list of 148 ISOGG mismatches with sample details |
+| `results/power_analysis_ancient.json` | Power analysis by variant density |
+| `results/significance_tests.json` | Two-proportion z-test p-values for Tables S3/S4 |
 | `results/validation_report_*.md` | Validation reports in Markdown format |
 | `results/aadr_*.md` | AADR stratified analysis reports |
+| `results/isogg_*.md` | ISOGG validation reports |
 
 ### Validation Scripts
 
@@ -119,6 +127,13 @@ Scripts for reproducing validation analyses from scratch.
 | `scripts/validate_1kg.py` | Validate against 1000 Genomes |
 | `scripts/validate_aadr_stratified.py` | Stratified ancient DNA validation by variant density |
 | `scripts/gather_validation_and_comparative_data.py` | Comprehensive validation and tool comparison |
+| `scripts/validate_isogg.py` | ISOGG nomenclature mapping validation |
+| `scripts/analyze_isogg_mismatches.py` | Categorize and analyze ISOGG mismatches |
+| `scripts/generate_isogg_mismatch_table.py` | Generate Supplementary Table S5 (mismatch details) |
+| `scripts/power_analysis_ancient.py` | Power analysis by variant density threshold |
+| `scripts/calculate_significance.py` | Two-proportion z-tests for statistical significance |
+| `scripts/test_coalescent_priors.py` | Compare uniform vs coalescent prior performance |
+| `scripts/generate_assets.py` | Generate publication figures |
 | `scripts/prep_for_zenodo.py` | Script used to create this bundle |
 
 ---

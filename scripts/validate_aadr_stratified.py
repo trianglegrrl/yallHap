@@ -445,11 +445,14 @@ def main() -> int:
             for i in range(10)
         ]
     else:
+        # Default: 5 bins with 1-4% / 4-10% split to highlight 4% threshold
+        # where Bayesian mode starts outperforming heuristic
         bins = [
             ("<1%", 0.0, 1.0),
-            ("1-10%", 1.0, 10.0),
+            ("1-4%", 1.0, 4.0),
+            ("4-10%", 4.0, 10.0),
             ("10-50%", 10.0, 50.0),
-            ("≥50%", 50.0, 100.1),  # 100.1 to include 100%
+            (">=50%", 50.0, 100.1),  # 100.1 to include 100%
         ]
 
     # Modes to test
