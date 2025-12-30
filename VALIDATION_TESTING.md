@@ -261,7 +261,8 @@ python scripts/gather_validation_and_comparative_data.py \
 
 **Key findings from tool comparison:**
 - yhaplo misclassifies Kennewick Man (calls CT instead of Q)
-- Yleaf fails to produce calls for all 9 ancient samples
+- Yleaf correctly classifies all 9 samples with QC 1.0, matching ground truth exactly for 2/9 samples (VK287, VK292)
+  - **Note:** Initial macOS testing returned "NA" for all samples due to a known multiprocessing bug ([GitHub issue #34](https://github.com/genid/Yleaf/issues/34)). Results require applying a workaround on macOS/Windows.
 - pathPhynder achieves deepest resolution but requires BAM input and is slower
 - yallHap Bayesian mode matches ground truth in 4/9 samples vs 1/9 for heuristic
 
