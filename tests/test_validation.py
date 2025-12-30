@@ -198,18 +198,14 @@ class TestValidationMetrics:
                 expected_haplogroup="R1b",
                 called_haplogroup="R1b",
                 confidence=0.99,
-                comparison=ComparisonResult(
-                    exact_match=True, major_match=True, depth_difference=0
-                ),
+                comparison=ComparisonResult(exact_match=True, major_match=True, depth_difference=0),
             ),
             ValidationResult(
                 sample_id="S2",
                 expected_haplogroup="J2a",
                 called_haplogroup="J2a",
                 confidence=0.98,
-                comparison=ComparisonResult(
-                    exact_match=True, major_match=True, depth_difference=0
-                ),
+                comparison=ComparisonResult(exact_match=True, major_match=True, depth_difference=0),
             ),
         ]
 

@@ -314,9 +314,7 @@ class TestScoreWithDamageAdjustment:
             haplogroup="CT",
         )
 
-    def test_damage_transition_penalized_in_ancient_mode(
-        self, damage_snp: SNP
-    ) -> None:
+    def test_damage_transition_penalized_in_ancient_mode(self, damage_snp: SNP) -> None:
         """C>T derived call is penalized in ancient mode."""
         variant = Variant(
             chrom="Y",
@@ -328,12 +326,8 @@ class TestScoreWithDamageAdjustment:
             allele_depth=(0, 30),
         )
 
-        modern_score = score_variant_with_ad(
-            variant, damage_snp, is_ancient=False, damage_rate=0.0
-        )
-        ancient_score = score_variant_with_ad(
-            variant, damage_snp, is_ancient=True, damage_rate=0.1
-        )
+        modern_score = score_variant_with_ad(variant, damage_snp, is_ancient=False, damage_rate=0.0)
+        ancient_score = score_variant_with_ad(variant, damage_snp, is_ancient=True, damage_rate=0.1)
 
         # Ancient mode should reduce confidence in C>T calls
         assert modern_score.weight > ancient_score.weight
@@ -351,9 +345,7 @@ class TestScoreWithDamageAdjustment:
             allele_depth=(0, 30),
         )
 
-        modern_score = score_variant_with_ad(
-            variant, non_damage_snp, is_ancient=False
-        )
+        modern_score = score_variant_with_ad(variant, non_damage_snp, is_ancient=False)
         ancient_score = score_variant_with_ad(
             variant, non_damage_snp, is_ancient=True, damage_rate=0.1
         )
@@ -410,4 +402,3 @@ class TestMinSupportThreshold:
 
         assert score.weight > 0.7
         assert score.support_ratio > 0.7
-

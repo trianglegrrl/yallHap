@@ -148,9 +148,7 @@ class TestISOGGMapper:
         result = mapper.to_isogg("R-XYZ123")
         assert result == "R-XYZ123~"
 
-    def test_multi_haplogroup_snp_prefers_matching_clade(
-        self, sample_isogg_file: Path
-    ) -> None:
+    def test_multi_haplogroup_snp_prefers_matching_clade(self, sample_isogg_file: Path) -> None:
         """When SNP maps to multiple haplogroups, prefers one matching major clade."""
         from yallhap.isogg import ISOGGDatabase, ISOGGMapper
         from yallhap.tree import Tree
@@ -218,9 +216,7 @@ class TestISOGGMapper:
         result = mapper.to_isogg("R-A100")
         assert result == "R1b1a1b1a1a2c1a1d5a"
 
-    def test_to_isogg_from_snps_finds_most_specific(
-        self, sample_isogg_file: Path
-    ) -> None:
+    def test_to_isogg_from_snps_finds_most_specific(self, sample_isogg_file: Path) -> None:
         """to_isogg_from_snps finds the most specific haplogroup from SNP list."""
         from yallhap.isogg import ISOGGDatabase, ISOGGMapper
         from yallhap.tree import Tree
@@ -285,9 +281,7 @@ class TestISOGGMapper:
         assert result is not None
         assert "I2" in result or result.startswith("I2")
 
-    def test_direct_snp_lookup_uses_major_clade_hint(
-        self, sample_isogg_file: Path
-    ) -> None:
+    def test_direct_snp_lookup_uses_major_clade_hint(self, sample_isogg_file: Path) -> None:
         """Direct SNP lookup in to_isogg uses major clade from YFull name."""
         from yallhap.isogg import ISOGGDatabase, ISOGGMapper
         from yallhap.tree import Tree

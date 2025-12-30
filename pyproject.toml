@@ -80,6 +80,8 @@ exclude = '''
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+
+[tool.ruff.lint]
 select = [
     "E",      # pycodestyle errors
     "W",      # pycodestyle warnings
@@ -96,7 +98,7 @@ ignore = [
     "B008",   # function call in default argument (needed for Click)
 ]
 
-[tool.ruff.isort]
+[tool.ruff.lint.isort]
 known-first-party = ["yallhap"]
 
 [tool.mypy]
@@ -107,10 +109,10 @@ disallow_untyped_defs = true
 disallow_incomplete_defs = true
 check_untyped_defs = true
 strict_optional = true
-plugins = ["numpy.typing.mypy_plugin"]
+# numpy.typing.mypy_plugin is deprecated in NumPy 2.3+
 
 [[tool.mypy.overrides]]
-module = ["pysam.*", "pandas.*"]
+module = ["pysam.*", "pandas.*", "pyliftover.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

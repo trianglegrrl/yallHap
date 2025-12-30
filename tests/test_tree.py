@@ -258,11 +258,13 @@ class TestTreeEdgeCases:
 
     def test_linear_tree(self) -> None:
         """Linear tree (no branching)."""
-        tree = Tree.from_dict({
-            "A": ["B"],
-            "B": ["C"],
-            "C": ["D"],
-        })
+        tree = Tree.from_dict(
+            {
+                "A": ["B"],
+                "B": ["C"],
+                "C": ["D"],
+            }
+        )
 
         path = tree.path_to_root("D")
         assert len(path) == 4
@@ -270,9 +272,11 @@ class TestTreeEdgeCases:
 
     def test_wide_tree(self) -> None:
         """Wide tree (many children)."""
-        tree = Tree.from_dict({
-            "ROOT": ["A", "B", "C", "D", "E"],
-        })
+        tree = Tree.from_dict(
+            {
+                "ROOT": ["A", "B", "C", "D", "E"],
+            }
+        )
 
         children = tree.get_children("ROOT")
         assert len(children) == 5

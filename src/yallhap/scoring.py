@@ -121,11 +121,11 @@ def compute_variant_weight(
 
     # Combine factors geometrically
     if support_ratio is not None:
-        weight = (quality_factor * support_factor * error_factor) ** 0.5
+        weight: float = (quality_factor * support_factor * error_factor) ** 0.5
     else:
         weight = quality_factor * error_factor
 
-    return max(0.0, min(1.0, weight))
+    return float(max(0.0, min(1.0, weight)))
 
 
 def score_variant_with_ad(
@@ -191,10 +191,7 @@ def score_variant_with_ad(
     # Compute log-likelihood contribution
     # For derived calls: log(weight)
     # For ancestral calls: log(weight) (also positive - we're scoring the call quality)
-    if weight > 0:
-        log_likelihood = math.log(weight)
-    else:
-        log_likelihood = -100.0  # Very negative for zero weight
+    log_likelihood = math.log(weight) if weight > 0 else -100.0
 
     return VariantScore(
         log_likelihood=log_likelihood,
@@ -204,9 +201,3 @@ def score_variant_with_ad(
         quality_factor=quality_factor,
         damage_probability=damage_prob,
     )
-
-
-
-
-
-

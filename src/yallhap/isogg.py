@@ -138,7 +138,7 @@ class ISOGGDatabase:
         counts: dict[str, int] = {}
         for snp_list in self._snps_by_name.values():
             for snp in snp_list:
-            counts[snp.haplogroup] = counts.get(snp.haplogroup, 0) + 1
+                counts[snp.haplogroup] = counts.get(snp.haplogroup, 0) + 1
         return counts
 
     def __len__(self) -> int:
@@ -365,11 +365,7 @@ class ISOGGMapper:
             Returns original if no mapping exists
         """
         # Extract major clade hint for disambiguation
-        major_clade = (
-            yfull_haplogroup.split("-")[0][0].upper()
-            if yfull_haplogroup
-            else None
-        )
+        major_clade = yfull_haplogroup.split("-")[0][0].upper() if yfull_haplogroup else None
 
         # Priority 1: Direct SNP lookup from name
         # YFull format is "LETTER-SNP" (e.g., "R-L21", "I-M438")

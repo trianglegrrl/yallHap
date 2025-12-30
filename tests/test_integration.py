@@ -164,9 +164,9 @@ class TestAncientModeIntegration:
         db = ISOGGDatabase.from_file(isogg_path)
         mapper = ISOGGMapper(tree, db)
 
-        # Unmapped haplogroup returns original
+        # Unmapped haplogroup returns original with tilde suffix
         result = mapper.to_isogg("R-XYZ")
-        assert result == "R-XYZ"
+        assert result == "R-XYZ~"
 
 
 class TestCLIAncientModeIntegration:

@@ -371,8 +371,8 @@ class TestBayesianClassifier:
         ancient_posteriors = classifier.compute_posteriors(variants, is_ancient=True)
 
         # Get posterior for A (which has C>T SNP)
-        modern_a_prob = next(p for hg, p in modern_posteriors if hg == "A")
-        ancient_a_prob = next(p for hg, p in ancient_posteriors if hg == "A")
+        _modern_a_prob = next(p for hg, p in modern_posteriors if hg == "A")
+        _ancient_a_prob = next(p for hg, p in ancient_posteriors if hg == "A")
 
         # Ancient mode should reduce confidence in C>T calls
         # (posteriors might still favor A, but with less certainty)
@@ -464,8 +464,8 @@ class TestBayesianWithAD:
         low_posteriors = classifier.compute_posteriors(low_support)
 
         # Find A in both results
-        high_a_prob = next((p for hg, p in high_posteriors if hg == "A"), 0)
-        low_a_prob = next((p for hg, p in low_posteriors if hg == "A"), 0)
+        _high_a_prob = next((p for hg, p in high_posteriors if hg == "A"), 0)
+        _low_a_prob = next((p for hg, p in low_posteriors if hg == "A"), 0)
 
         # Low support should reduce confidence (or at least not increase it)
         # The distribution should be more spread out with low support
@@ -654,7 +654,7 @@ class TestCoalescentPrior:
 
         prior = compute_coalescent_prior(simple_tree, prior_type="uniform")
         expected = 1.0 / len(prior)
-        for hg, p in prior.items():
+        for _hg, p in prior.items():
             assert abs(p - expected) < 1e-6
 
 

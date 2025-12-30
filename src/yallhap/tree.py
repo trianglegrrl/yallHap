@@ -134,9 +134,7 @@ class Tree:
         else:
             self._build_from_flat_dict(data)
 
-    def _build_from_yfull_nested(
-        self, data: dict, parent_name: str | None = None
-    ) -> None:
+    def _build_from_yfull_nested(self, data: dict, parent_name: str | None = None) -> None:
         """
         Build tree from YFull's nested JSON format.
 
@@ -188,7 +186,7 @@ class Tree:
                         self._build_from_yfull_nested(child_data, parent_name=name)
 
         # Calculate depths after building (only from root call)
-        if parent_name is None:
+        if parent_name is None and self._root is not None:
             self._calculate_depths(self._root, 0)
 
     def _build_from_flat_dict(self, data: dict) -> None:
@@ -383,10 +381,7 @@ class Tree:
         Yields:
             Nodes in depth-first order
         """
-        if start is None:
-            start_node = self.root
-        else:
-            start_node = self.get(start)
+        start_node = self.root if start is None else self.get(start)
 
         stack = [start_node]
         while stack:
@@ -408,10 +403,7 @@ class Tree:
         """
         from collections import deque
 
-        if start is None:
-            start_node = self.root
-        else:
-            start_node = self.get(start)
+        start_node = self.root if start is None else self.get(start)
 
         queue: deque[Node] = deque([start_node])
         while queue:

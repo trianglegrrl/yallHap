@@ -312,9 +312,7 @@ class SNPDatabase:
 
         raise KeyError(f"SNP not found: {name}")
 
-    def get_by_position(
-        self, position: int, reference: ReferenceGenome = "grch38"
-    ) -> list[SNP]:
+    def get_by_position(self, position: int, reference: ReferenceGenome = "grch38") -> list[SNP]:
         """
         Get SNPs at a genomic position.
 

@@ -10,7 +10,7 @@ import json
 import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any, TextIO
+from typing import Any, TextIO, TypedDict
 
 import click
 
@@ -18,6 +18,15 @@ from yallhap import __version__
 from yallhap.classifier import HaplogroupCall, HaplogroupClassifier
 from yallhap.snps import SNPDatabase
 from yallhap.tree import Tree
+
+
+class _DownloadFile(TypedDict):
+    """Type definition for download file entries."""
+
+    url: str
+    path: Path
+    label: str
+
 
 # Module-level classifier for worker processes (initialized by _init_worker)
 _worker_classifier: HaplogroupClassifier | None = None
@@ -776,7 +785,7 @@ def download(output_dir: Path, force: bool) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Define files to download
-    files_to_download = [
+    files_to_download: list[_DownloadFile] = [
         {
             "url": "https://raw.githubusercontent.com/YFullTeam/YTree/master/current_tree.json",
             "path": output_dir / "yfull_tree.json",

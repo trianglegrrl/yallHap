@@ -184,4 +184,3 @@ class TestDamageRescale:
         assert apply_damage_rescale(40, "T", "C", mode="moderate") == 30.0
         # Aggressive: 50% penalty
         assert apply_damage_rescale(40, "T", "C", mode="aggressive") == 20.0
-

@@ -275,9 +275,7 @@ L21,,2887478,2655229,C,T,R-L21
         assert snp.position_t2t is not None
         assert snp.position_t2t > 0
 
-    def test_lift_to_t2t_from_grch37(
-        self, tmp_path: Path, grch37_chain_path: Path
-    ) -> None:
+    def test_lift_to_t2t_from_grch37(self, tmp_path: Path, grch37_chain_path: Path) -> None:
         """Test liftover from GRCh37 to T2T."""
         csv_content = """name,aliases,grch37_pos,grch38_pos,ancestral,derived,haplogroup
 L21,,2887478,,C,T,R-L21

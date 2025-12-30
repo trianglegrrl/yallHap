@@ -23,18 +23,28 @@ class MutationType(Enum):
 
 
 # Transition pairs (within-class mutations)
-TRANSITIONS = frozenset([
-    ("A", "G"), ("G", "A"),  # Purine <-> Purine
-    ("C", "T"), ("T", "C"),  # Pyrimidine <-> Pyrimidine
-])
+TRANSITIONS = frozenset(
+    [
+        ("A", "G"),
+        ("G", "A"),  # Purine <-> Purine
+        ("C", "T"),
+        ("T", "C"),  # Pyrimidine <-> Pyrimidine
+    ]
+)
 
 # Transversion pairs (between-class mutations)
-TRANSVERSIONS = frozenset([
-    ("A", "C"), ("C", "A"),
-    ("A", "T"), ("T", "A"),
-    ("G", "C"), ("C", "G"),
-    ("G", "T"), ("T", "G"),
-])
+TRANSVERSIONS = frozenset(
+    [
+        ("A", "C"),
+        ("C", "A"),
+        ("A", "T"),
+        ("T", "A"),
+        ("G", "C"),
+        ("C", "G"),
+        ("G", "T"),
+        ("T", "G"),
+    ]
+)
 
 
 def get_mutation_type(ref: str, alt: str) -> MutationType | None:
@@ -155,10 +165,14 @@ class DamageFilter:
 
             # If we know the SNP's expected alleles, check if damage
             # could explain an apparent derived call
-            if ancestral and derived:
-                # Damage is when: ancestral allele gets damaged to look like derived
-                if pattern.ancestral == ancestral.upper() and pattern.derived == derived.upper():
-                    return True
+            # Damage is when: ancestral allele gets damaged to look like derived
+            if (
+                ancestral
+                and derived
+                and pattern.ancestral == ancestral.upper()
+                and pattern.derived == derived.upper()
+            ):
+                return True
 
         return False
 
@@ -279,4 +293,3 @@ def apply_damage_rescale(
         return float(quality) * (1 - other_transition_penalty)
 
     return float(quality)
-

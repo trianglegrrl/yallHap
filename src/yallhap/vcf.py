@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from types import TracebackType
 
 import pysam
 
@@ -138,7 +139,12 @@ class VCFReader:
         self._resolve_sample()
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
         if self._vcf:
             self._vcf.close()
 
@@ -217,6 +223,10 @@ class VCFReader:
     def _record_to_variant(self, record: pysam.VariantRecord) -> Variant | None:
         """Convert pysam record to Variant object."""
         if self._sample is None:
+            return None
+
+        # Skip records with no reference allele (malformed VCF)
+        if record.ref is None:
             return None
 
         sample_data = record.samples[self._sample]

@@ -95,4 +95,3 @@ class TestTSVOutput:
         assert data["sample"] == "TEST001"
         assert data["haplogroup"] == "R-M343"
         assert data["confidence"] == 0.95
-

@@ -335,9 +335,3 @@ class TestTotalAllelicDepth:
         )
 
         assert variant.total_allelic_depth is None
-
-
-
-
-
-

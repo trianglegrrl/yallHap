@@ -150,7 +150,7 @@ class QCScores:
         product = 1.0
         for s in scores:
             product *= s
-        return product ** (1 / len(scores))
+        return float(product ** (1 / len(scores)))
 
 
 @dataclass
@@ -397,6 +397,10 @@ class HaplogroupClassifier:
             pos = record.pos
             ref = record.ref
             alts = record.alts or ()
+
+            # Skip records with no reference allele (malformed VCF)
+            if ref is None:
+                continue
 
             # Skip non-SNPs
             if len(ref) != 1 or not all(len(a) == 1 for a in alts):

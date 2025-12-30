@@ -392,8 +392,12 @@ Y	2656183	M343	G	A	.	PASS	.	GT	1/1
         with ProcessPoolExecutor(
             max_workers=2,
             initializer=_init_worker,
-            initargs=(Path(sample_snps_csv).parent / "tree.json", sample_snps_csv, {"reference": "grch38"}),
-        ) as executor:
+            initargs=(
+                Path(sample_snps_csv).parent / "tree.json",
+                sample_snps_csv,
+                {"reference": "grch38"},
+            ),
+        ) as _executor:
             # Need to create tree.json first
             import json
 
@@ -481,7 +485,7 @@ Y	2656183	M343	G	A	.	PASS	.	GT	1/1	1/1	1/1	0/0
         # Results should match exactly
         assert len(sequential_results) == len(parallel_results) == 4
 
-        for seq, par in zip(sequential_results, parallel_results):
+        for seq, par in zip(sequential_results, parallel_results, strict=True):
             assert seq.sample == par.sample
             assert seq.haplogroup == par.haplogroup
             assert seq.confidence == par.confidence
