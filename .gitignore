@@ -148,7 +148,7 @@ yhaplo/
 # Paper and internal files
 paper/
 output/
-ALAINA_VOICE.md
+notes/
 scripts/compile_p*
 scripts/generat*
 scripts/verify_p*
