@@ -170,7 +170,7 @@ Scripts for reproducing validation analyses from scratch.
 
 | Component | License |
 |-----------|---------|
-| **yallHap software** | MIT License |
+| **yallHap software** | PolyForm Noncommercial License 1.0.0 |
 | **Derived data/results** (benchmark outputs, validation reports) | CC-BY-4.0 |
 | **Original consortium data** | See respective provider terms |
 

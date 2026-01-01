@@ -7,7 +7,7 @@ name = "yallhap"
 version = "0.3.0"
 description = "Modern, pipeline-friendly Y-chromosome haplogroup inference"
 readme = "README.md"
-license = {text = "MIT"}
+license = {text = "PolyForm Noncommercial 1.0.0"}
 authors = [
     {name = "yallHap Contributors"}
 ]
@@ -16,7 +16,7 @@ classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: Console",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
+    "License :: Other/Proprietary License",
     "Operating System :: POSIX :: Linux",
     "Operating System :: MacOS",
     "Programming Language :: Python :: 3",

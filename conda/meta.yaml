@@ -45,8 +45,8 @@ test:
 
 about:
   home: https://github.com/trianglegrrl/yallHap
-  license: MIT
-  license_family: MIT
+  license: PolyForm-Noncommercial-1.0.0
+  license_family: OTHER
   license_file: LICENSE
   summary: Modern Y-chromosome haplogroup inference
   description: |

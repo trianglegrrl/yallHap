@@ -2,7 +2,7 @@
 
 Modern, pipeline-friendly Y-chromosome haplogroup inference.
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: PolyForm Noncommercial](https://img.shields.io/badge/License-PolyForm%20Noncommercial-blue.svg)](https://polyformproject.org/licenses/noncommercial/1.0.0)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 
 ## Features
@@ -558,7 +558,9 @@ If you use yallHap in your research, please cite:
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
+PolyForm Noncommercial License 1.0.0 - see [LICENSE](LICENSE) for details.
+
+This license allows use for noncommercial purposes, including research, education, and personal projects. For commercial use, please contact the maintainers.
 
 ## Acknowledgments
 

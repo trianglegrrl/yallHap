@@ -407,7 +407,7 @@ def main() -> int:
     print("             AADR, gnomAD, ancient DNA, phylogenetics")
     print()
     print("   License:")
-    print("     - yallHap software: MIT License")
+    print("     - yallHap software: PolyForm Noncommercial License 1.0.0")
     print("     - Derived data/results: CC-BY-4.0")
     print("     - Original consortium data: see respective provider terms")
     print()
