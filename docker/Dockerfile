@@ -26,7 +26,7 @@ FROM python:3.11-slim
 
 LABEL maintainer="yallHap Contributors"
 LABEL description="Modern Y-chromosome haplogroup inference"
-LABEL version="0.2.0"
+LABEL version="0.4.0"
 
 WORKDIR /app
 
