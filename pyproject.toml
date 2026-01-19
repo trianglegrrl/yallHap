@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "yallhap"
-version = "0.4.0"
+version = "0.5.0"
 description = "Modern, pipeline-friendly Y-chromosome haplogroup inference"
 readme = "README.md"
 license = {text = "PolyForm Noncommercial 1.0.0"}
