@@ -25,7 +25,7 @@ class TestTSVOutput:
             ),
             path=["ROOT", "R", "R-M343"],
             defining_snps=["M343"],
-            alternatives={},
+            alternatives=[],
             snp_stats=SNPStats(
                 informative_tested=100,
                 derived=50,
@@ -81,7 +81,7 @@ class TestTSVOutput:
             qc_scores=QCScores(),
             path=["ROOT", "R-M343"],
             defining_snps=["M343"],
-            alternatives={},
+            alternatives=[],
             snp_stats=SNPStats(derived=10, ancestral=5, missing=2),
             reference="grch38",
             tree_version="YFull",

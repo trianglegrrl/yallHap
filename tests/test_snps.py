@@ -314,7 +314,7 @@ L21,,2887478,2655229,C,T,R-L21
         db = SNPDatabase.from_csv(csv_path)
 
         with pytest.raises(ValueError, match="Cannot liftover from T2T to T2T"):
-            db.lift_to_t2t("dummy.chain", "t2t")  # type: ignore
+            db.lift_to_t2t("dummy.chain", "t2t")
 
     def test_position_index_updated_after_liftover(
         self, tmp_path: Path, liftover_chain_path: Path

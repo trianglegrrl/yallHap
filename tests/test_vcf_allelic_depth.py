@@ -93,6 +93,7 @@ class TestVariantSupportRatio:
 
         # Alt is called, so support ratio = alt_reads / total = 20/30
         expected = 20 / 30
+        assert variant.support_ratio is not None
         assert abs(variant.support_ratio - expected) < 0.001
 
     def test_support_ratio_mixed_reads_ref_called(self) -> None:
@@ -108,6 +109,7 @@ class TestVariantSupportRatio:
 
         # Ref is called, so support ratio = ref_reads / total = 20/30
         expected = 20 / 30
+        assert variant.support_ratio is not None
         assert abs(variant.support_ratio - expected) < 0.001
 
     def test_support_ratio_missing_ad(self) -> None:
@@ -162,6 +164,7 @@ class TestVariantSupportRatio:
 
         # G is called (genotype=2), so support ratio = 15 / 30
         expected = 15 / 30
+        assert variant.support_ratio is not None
         assert abs(variant.support_ratio - expected) < 0.001
 
 
@@ -335,7 +338,3 @@ class TestTotalAllelicDepth:
         )
 
         assert variant.total_allelic_depth is None
-
-
-
-

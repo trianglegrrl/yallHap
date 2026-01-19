@@ -2,6 +2,8 @@
 Unit tests for yallhap.classifier module.
 """
 
+from pathlib import Path
+
 import pytest
 
 from yallhap.classifier import (
@@ -116,7 +118,9 @@ class TestHaplogroupClassifier:
     """Tests for HaplogroupClassifier class."""
 
     @pytest.fixture
-    def classifier(self, sample_tree_dict: dict, sample_snps_csv) -> HaplogroupClassifier:
+    def classifier(
+        self, sample_tree_dict: dict[str, list[str]], sample_snps_csv: Path
+    ) -> HaplogroupClassifier:
         """Create a classifier with test data."""
         tree = Tree.from_dict(sample_tree_dict)
         snp_db = SNPDatabase.from_csv(sample_snps_csv)
@@ -132,7 +136,9 @@ class TestHaplogroupClassifier:
         assert classifier.snp_db is not None
         assert classifier.reference == "grch38"
 
-    def test_classifier_ancient_mode(self, sample_tree_dict: dict, sample_snps_csv) -> None:
+    def test_classifier_ancient_mode(
+        self, sample_tree_dict: dict[str, list[str]], sample_snps_csv: Path
+    ) -> None:
         """Test ancient DNA mode configuration."""
         tree = Tree.from_dict(sample_tree_dict)
         snp_db = SNPDatabase.from_csv(sample_snps_csv)
@@ -152,7 +158,9 @@ class TestClassifierDamageFiltering:
     """Tests for ancient DNA damage filtering."""
 
     @pytest.fixture
-    def classifier_ancient(self, sample_tree_dict: dict, sample_snps_csv) -> HaplogroupClassifier:
+    def classifier_ancient(
+        self, sample_tree_dict: dict[str, list[str]], sample_snps_csv: Path
+    ) -> HaplogroupClassifier:
         """Create classifier in ancient mode."""
         tree = Tree.from_dict(sample_tree_dict)
         snp_db = SNPDatabase.from_csv(sample_snps_csv)
@@ -188,7 +196,7 @@ class TestClassifyBatch:
     """Tests for batch classification functionality."""
 
     @pytest.fixture
-    def multi_sample_vcf(self, tmp_path) -> str:
+    def multi_sample_vcf(self, tmp_path: Path) -> str:
         """Create a minimal multi-sample VCF for testing."""
         import pysam
 
@@ -213,7 +221,9 @@ Y	22739367	M269	T	C	.	PASS	.	GT	1/1	0/0	./.
         return str(vcf_gz)
 
     @pytest.fixture
-    def batch_classifier(self, sample_tree_dict: dict, sample_snps_csv) -> HaplogroupClassifier:
+    def batch_classifier(
+        self, sample_tree_dict: dict[str, list[str]], sample_snps_csv: Path
+    ) -> HaplogroupClassifier:
         """Create classifier for batch tests."""
         tree = Tree.from_dict(sample_tree_dict)
         snp_db = SNPDatabase.from_csv(sample_snps_csv)
@@ -255,7 +265,7 @@ Y	22739367	M269	T	C	.	PASS	.	GT	1/1	0/0	./.
         assert results == []
 
     def test_classify_batch_with_ancient_mode(
-        self, sample_tree_dict: dict, sample_snps_csv, multi_sample_vcf: str
+        self, sample_tree_dict: dict[str, list[str]], sample_snps_csv: Path, multi_sample_vcf: str
     ) -> None:
         """Test batch classification with transversions-only mode."""
         tree = Tree.from_dict(sample_tree_dict)
@@ -277,7 +287,7 @@ class TestParallelBatchProcessing:
     """Tests for parallel batch processing in CLI."""
 
     @pytest.fixture
-    def vcf_files(self, tmp_path) -> list:
+    def vcf_files(self, tmp_path: Path) -> list[Path]:
         """Create multiple VCF files for parallel processing tests."""
         import pysam
 
@@ -337,7 +347,7 @@ Y	2656183	M343	G	A	.	PASS	.	GT	1/1
         return vcf_paths
 
     @pytest.fixture
-    def tree_json(self, tmp_path, sample_tree_dict: dict) -> str:
+    def tree_json(self, tmp_path: Path, sample_tree_dict: dict[str, list[str]]) -> str:
         """Create tree JSON file for CLI tests."""
         import json
 
@@ -347,7 +357,7 @@ Y	2656183	M343	G	A	.	PASS	.	GT	1/1
         return str(tree_path)
 
     def test_worker_init_and_classify(
-        self, vcf_files: list, tree_json: str, sample_snps_csv
+        self, vcf_files: list[Path], tree_json: str, sample_snps_csv: Path
     ) -> None:
         """Test worker initialization and classification functions."""
         from pathlib import Path
@@ -369,7 +379,7 @@ Y	2656183	M343	G	A	.	PASS	.	GT	1/1
         assert isinstance(result, HaplogroupCall)
 
     def test_parallel_results_match_sequential(
-        self, vcf_files: list, sample_tree_dict: dict, sample_snps_csv
+        self, vcf_files: list[Path], sample_tree_dict: dict[str, list[str]], sample_snps_csv: Path
     ) -> None:
         """Test that parallel processing returns same results as sequential."""
         from pathlib import Path
@@ -424,7 +434,7 @@ Y	2656183	M343	G	A	.	PASS	.	GT	1/1
         assert sequential_samples == parallel_samples
 
     def test_parallel_single_file_with_multiple_threads(
-        self, vcf_files: list, tree_json: str, sample_snps_csv
+        self, vcf_files: list[Path], tree_json: str, sample_snps_csv: Path
     ) -> None:
         """Test parallel processing with more threads than files."""
         from concurrent.futures import ProcessPoolExecutor
@@ -446,7 +456,7 @@ Y	2656183	M343	G	A	.	PASS	.	GT	1/1
         assert results[0].sample == "SAMPLE_R1"
 
     @pytest.fixture
-    def multi_sample_vcf(self, tmp_path) -> str:
+    def multi_sample_vcf(self, tmp_path: Path) -> str:
         """Create a multi-sample VCF for batch parallel tests."""
         import pysam
 
@@ -467,7 +477,7 @@ Y	2656183	M343	G	A	.	PASS	.	GT	1/1	1/1	1/1	0/0
         return str(vcf_gz)
 
     def test_classify_batch_parallel_matches_sequential(
-        self, multi_sample_vcf: str, sample_tree_dict: dict, sample_snps_csv
+        self, multi_sample_vcf: str, sample_tree_dict: dict[str, list[str]], sample_snps_csv: Path
     ) -> None:
         """Test that parallel batch classification matches sequential results."""
         tree = Tree.from_dict(sample_tree_dict)
@@ -495,7 +505,7 @@ Y	2656183	M343	G	A	.	PASS	.	GT	1/1	1/1	1/1	0/0
                 assert seq.snp_stats.ancestral == par.snp_stats.ancestral
 
     def test_classify_batch_parallel_preserves_order(
-        self, multi_sample_vcf: str, sample_tree_dict: dict, sample_snps_csv
+        self, multi_sample_vcf: str, sample_tree_dict: dict[str, list[str]], sample_snps_csv: Path
     ) -> None:
         """Test that parallel batch classification preserves sample order."""
         tree = Tree.from_dict(sample_tree_dict)

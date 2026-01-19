@@ -167,10 +167,10 @@ class TestTraversalEdgeCases:
         """Tree with only root node."""
         from yallhap.classifier import traverse_with_tolerance
 
-        tree_dict = {'ROOT (Y-Chromosome "Adam")': []}
+        tree_dict: dict[str, list[str]] = {'ROOT (Y-Chromosome "Adam")': []}
         tree = Tree.from_dict(tree_dict)
 
-        scores = {}
+        scores: dict[str, dict[str, int]] = {}
         hg, path, stats = traverse_with_tolerance(tree, scores, max_tolerance=3)
         assert hg == 'ROOT (Y-Chromosome "Adam")'
 

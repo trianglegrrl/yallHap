@@ -221,7 +221,7 @@ class TestISOGGMapper:
         from yallhap.isogg import ISOGGDatabase, ISOGGMapper
         from yallhap.tree import Tree
 
-        tree_dict = {'ROOT (Y-Chromosome "Adam")': []}
+        tree_dict: dict[str, list[str]] = {'ROOT (Y-Chromosome "Adam")': []}
         tree = Tree.from_dict(tree_dict)
 
         db = ISOGGDatabase.from_file(sample_isogg_file)
@@ -238,7 +238,7 @@ class TestISOGGMapper:
         from yallhap.isogg import ISOGGDatabase, ISOGGMapper
         from yallhap.tree import Tree
 
-        tree_dict = {'ROOT (Y-Chromosome "Adam")': []}
+        tree_dict: dict[str, list[str]] = {'ROOT (Y-Chromosome "Adam")': []}
         tree = Tree.from_dict(tree_dict)
 
         db = ISOGGDatabase.from_file(sample_isogg_file)
@@ -252,7 +252,7 @@ class TestISOGGMapper:
         from yallhap.isogg import ISOGGDatabase, ISOGGMapper
         from yallhap.tree import Tree
 
-        tree_dict = {'ROOT (Y-Chromosome "Adam")': []}
+        tree_dict: dict[str, list[str]] = {'ROOT (Y-Chromosome "Adam")': []}
         tree = Tree.from_dict(tree_dict)
 
         db = ISOGGDatabase.from_file(sample_isogg_file)
@@ -286,7 +286,7 @@ class TestISOGGMapper:
         from yallhap.isogg import ISOGGDatabase, ISOGGMapper
         from yallhap.tree import Tree
 
-        tree_dict = {'ROOT (Y-Chromosome "Adam")': []}
+        tree_dict: dict[str, list[str]] = {'ROOT (Y-Chromosome "Adam")': []}
         tree = Tree.from_dict(tree_dict)
 
         db = ISOGGDatabase.from_file(sample_isogg_file)

@@ -384,6 +384,7 @@ class TestMinSupportThreshold:
         score = score_variant_with_ad(variant, snp, min_support=0.7)
 
         assert score.weight < 0.3
+        assert score.support_ratio is not None
         assert score.support_ratio < 0.7
 
     def test_above_min_support_normal_weight(self, snp: SNP) -> None:
@@ -401,4 +402,5 @@ class TestMinSupportThreshold:
         score = score_variant_with_ad(variant, snp, min_support=0.7)
 
         assert score.weight > 0.7
+        assert score.support_ratio is not None
         assert score.support_ratio > 0.7
