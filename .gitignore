@@ -162,3 +162,7 @@ results/
 
 yallhap-validation*.md5
 yallhap-validation*.tar.gz
+
+CLAUDE.md
+.cursor/
+.claude/

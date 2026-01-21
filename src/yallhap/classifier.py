@@ -536,6 +536,87 @@ class HaplogroupClassifier:
             tree_version=self.tree.version_string,
         )
 
+    def classify_from_bam(
+        self,
+        bam_path: Path | str,
+        min_base_quality: int = 20,
+        min_mapping_quality: int = 20,
+    ) -> HaplogroupCall:
+        """
+        Classify a sample's Y-chromosome haplogroup directly from BAM file.
+
+        This method reads allele depths directly from BAM pileup at known
+        SNP positions, without requiring pre-called VCF. This is particularly
+        useful for ancient DNA where variant calling may miss low-coverage
+        positions.
+
+        Args:
+            bam_path: Path to BAM file (must be indexed with .bai)
+            min_base_quality: Minimum base quality to count (default 20)
+            min_mapping_quality: Minimum mapping quality to count (default 20)
+
+        Returns:
+            HaplogroupCall with classification result
+        """
+        from yallhap.bam import BAMReader
+
+        # Build position -> (ref, alt) dict for all SNPs in database
+        snp_positions: dict[int, tuple[str, str]] = {}
+        for snp in self.snp_db:
+            pos = snp.get_position(self.reference)
+            if pos is not None:
+                snp_positions[pos] = (snp.ancestral, snp.derived)
+
+        # Read variants from BAM
+        with BAMReader(
+            bam_path,
+            min_base_quality=min_base_quality,
+            min_mapping_quality=min_mapping_quality,
+        ) as reader:
+            variants = reader.get_variants_at_snp_positions(snp_positions)
+            sample_name = reader.sample
+
+        # Apply depth filter (BAM variants already passed quality filter)
+        filtered_variants: dict[int, Variant] = {}
+        for pos, variant in variants.items():
+            if variant.depth is not None and variant.depth < self.min_depth:
+                continue
+            filtered_variants[pos] = variant
+
+        # Use Bayesian classifier if enabled
+        if self.bayesian and self._bayesian_classifier is not None:
+            return self._classify_bayesian(filtered_variants, sample_name)
+
+        # Otherwise use heuristic scoring
+        haplogroup_scores = self._score_haplogroups(filtered_variants)
+        best_hg, confidence, qc_scores, stats = self._find_best_haplogroup(
+            haplogroup_scores, filtered_variants
+        )
+
+        # Build result
+        path = self.tree.path_from_root(best_hg) if best_hg in self.tree else []
+
+        # Get defining SNPs
+        defining_snps: list[str] = []
+        if best_hg in self.tree:
+            defining_snps = self.tree.get(best_hg).snps
+
+        # Get alternatives
+        alternatives = self._get_alternatives(haplogroup_scores, best_hg)
+
+        return HaplogroupCall(
+            sample=sample_name,
+            haplogroup=best_hg,
+            confidence=confidence,
+            qc_scores=qc_scores,
+            path=path,
+            defining_snps=defining_snps,
+            alternatives=alternatives,
+            snp_stats=stats,
+            reference=self.reference,
+            tree_version=self.tree.version_string,
+        )
+
     def _classify_bayesian(
         self,
         variants: dict[int, Variant],
