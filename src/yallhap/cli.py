@@ -32,6 +32,19 @@ class _DownloadFile(TypedDict):
 _worker_classifier: HaplogroupClassifier | None = None
 
 
+def _is_bam_file(path: Path) -> bool:
+    """
+    Check if a file is a BAM file based on extension.
+
+    Args:
+        path: Path to check
+
+    Returns:
+        True if file has .bam extension (case-insensitive)
+    """
+    return path.suffix.lower() == ".bam"
+
+
 def _load_snp_database(path: Path) -> SNPDatabase:
     """
     Load SNP database, auto-detecting format.
@@ -115,7 +128,7 @@ def main() -> None:
 
 
 @main.command()
-@click.argument("vcf", type=click.Path(exists=True, path_type=Path))
+@click.argument("input_file", type=click.Path(exists=True, path_type=Path))
 @click.option(
     "--tree",
     "-t",
@@ -142,6 +155,18 @@ def main() -> None:
     type=str,
     default=None,
     help="Sample name for multi-sample VCF [default: first sample]",
+)
+@click.option(
+    "--min-base-quality",
+    type=int,
+    default=20,
+    help="Minimum base quality for BAM pileup [default: 20]",
+)
+@click.option(
+    "--min-mapping-quality",
+    type=int,
+    default=20,
+    help="Minimum mapping quality for BAM pileup [default: 20]",
 )
 @click.option(
     "--ancient",
@@ -225,11 +250,13 @@ def main() -> None:
     help="Output format [default: json]",
 )
 def classify(
-    vcf: Path,
+    input_file: Path,
     tree: Path,
     snp_db: Path,
     reference: str,
     sample: str | None,
+    min_base_quality: int,
+    min_mapping_quality: int,
     ancient: bool,
     transversions_only: bool,
     damage_rescale: str,
@@ -246,9 +273,10 @@ def classify(
     output_format: str,
 ) -> None:
     """
-    Classify Y-chromosome haplogroup from VCF.
+    Classify Y-chromosome haplogroup from VCF or BAM.
 
-    VCF must contain Y-chromosome variants and be indexed (.tbi or .csi).
+    INPUT_FILE can be a VCF (indexed with .tbi/.csi) or BAM file (indexed with .bai).
+    For BAM files, pileup is performed directly at known SNP positions.
     """
     try:
         # Auto-adjust filtering for ancient DNA with Bayesian mode
@@ -322,22 +350,37 @@ def classify(
             if isogg_db_obj:
                 isogg_mapper = ISOGGMapper(tree_obj, isogg_db_obj)
 
-        # Run classification
-        click.echo(f"Classifying {vcf}...", err=True)
-        result = classifier.classify(vcf, sample)
+        # Run classification - detect input type
+        is_bam = _is_bam_file(input_file)
+        click.echo(f"Classifying {input_file}{'(BAM)' if is_bam else ''}...", err=True)
+
+        if is_bam:
+            result = classifier.classify_from_bam(
+                input_file,
+                min_base_quality=min_base_quality,
+                min_mapping_quality=min_mapping_quality,
+            )
+        else:
+            result = classifier.classify(input_file, sample)
 
         # Estimate contamination if requested
         contamination_result = None
         if estimate_contamination:
             from yallhap.contamination import ContaminationResult, estimate_contamination_with_snpdb
 
-            # Get variants from classifier
-            variants = classifier._get_variants(vcf, sample)  # type: ignore
-            rate, n_sites = estimate_contamination_with_snpdb(
-                variants, snp_db_obj, reference=reference, min_depth=min_depth  # type: ignore
-            )
-            contamination_result = ContaminationResult(rate=rate, n_sites=n_sites)
-            click.echo(f"Contamination estimate: {rate:.1%} ({n_sites} sites)", err=True)
+            if is_bam:
+                click.echo(
+                    "Warning: Contamination estimation from BAM not yet supported, skipping.",
+                    err=True,
+                )
+            else:
+                # Get variants from classifier
+                variants = classifier._get_variants(input_file, sample)  # type: ignore
+                rate, n_sites = estimate_contamination_with_snpdb(
+                    variants, snp_db_obj, reference=reference, min_depth=min_depth  # type: ignore
+                )
+                contamination_result = ContaminationResult(rate=rate, n_sites=n_sites)
+                click.echo(f"Contamination estimate: {rate:.1%} ({n_sites} sites)", err=True)
 
         # Add ISOGG haplogroup if available
         isogg_haplogroup = None
