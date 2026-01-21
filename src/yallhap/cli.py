@@ -405,12 +405,12 @@ def classify(
             _write_result(result, sys.stdout, output_format, extra_data)
 
         # Exit with appropriate code
+        # Only use non-zero exit for actual failures, not informational states
+        # Low confidence is informational - users should check the output
         if result.haplogroup == "NA":
             sys.exit(1)  # Classification failed
-        elif result.confidence < 0.95:
-            sys.exit(2)  # Low confidence
         else:
-            sys.exit(0)  # Success
+            sys.exit(0)  # Success (confidence level is in the output)
 
     except FileNotFoundError as e:
         click.echo(f"Error: File not found: {e}", err=True)
